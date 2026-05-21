@@ -41,6 +41,8 @@ A senha padrao e `controle`, e o laptop ja vem com ela preenchida. Para trocar a
 
 Depois de conectar, a tela do computador controlado abre em tela cheia no laptop. Para encerrar, clique no botao `Sair` no canto superior direito do laptop.
 
+Mouse e teclado usam um canal rapido TCP na porta `8767`, enquanto imagem/API usam a porta `8765`. Se o Windows Firewall perguntar, permita em redes privadas. Se o mouse ficar travado mas a imagem funcionar, execute `liberar_firewall_host_admin.bat` como Administrador no computador Host.
+
 Se o computador Host tiver dois monitores, o laptop mostra tres botoes no canto superior esquerdo:
 
 - `Duas telas`: mostra as duas telas juntas, lado a lado conforme a organizacao do Windows.

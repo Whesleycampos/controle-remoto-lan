@@ -30,6 +30,7 @@ PASSWORD_NOTE_PATH = APP_DIR / "SENHA_GERADA_HOST.txt"
 TRANSFER_DIR = Path.home() / "Downloads" / "ControleRemotoLAN"
 EASY_PASSWORD = "controle"
 DISCOVERY_PORT = 8766
+CONTROL_PORT = 8767
 
 QUALITY_PROFILES: dict[str, dict[str, float | int]] = {
     "balanced": {"fps": 10, "jpeg_quality": 82, "scale": 0.9},
@@ -47,6 +48,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "session_hours": 87600,
     "allow_private_network_only": True,
     "discovery_enabled": True,
+    "control_port": CONTROL_PORT,
 }
 
 PIL_Image = None
@@ -292,6 +294,7 @@ def start_discovery_beacon(config: dict[str, Any]) -> None:
         return
 
     port = int(config.get("port", 8765))
+    control_port = int(config.get("control_port", CONTROL_PORT))
 
     def worker() -> None:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
@@ -301,6 +304,7 @@ def start_discovery_beacon(config: dict[str, Any]) -> None:
                     "app": "ControleRemotoLAN",
                     "hostname": socket.gethostname(),
                     "port": port,
+                    "control_port": control_port,
                     "urls": [f"http://{ip}:{port}" for ip in local_ip_addresses()],
                     "easy_password": True,
                 }
@@ -309,6 +313,67 @@ def start_discovery_beacon(config: dict[str, Any]) -> None:
                 except OSError:
                     pass
                 time.sleep(2)
+
+    threading.Thread(target=worker, daemon=True).start()
+
+
+def start_control_socket_server(state: "RemoteState", config: dict[str, Any]) -> None:
+    bind_host = str(config.get("bind_host", "0.0.0.0"))
+    control_port = int(config.get("control_port", CONTROL_PORT))
+
+    def handle_client(conn: socket.socket, address: tuple[str, int]) -> None:
+        if config.get("allow_private_network_only", True) and not is_private_client(address[0]):
+            conn.close()
+            return
+        try:
+            conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            file = conn.makefile("rwb", buffering=0)
+            first = file.readline(4096)
+            if not first:
+                return
+            try:
+                hello = json.loads(first.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                return
+            token = str(hello.get("token", ""))
+            if not state.valid_session(token):
+                file.write(b'{"ok":false,"error":"sessao invalida"}\n')
+                return
+            file.write(b'{"ok":true}\n')
+            last_session_check = time.time()
+            while True:
+                line = file.readline(65536)
+                if not line:
+                    return
+                now = time.time()
+                if now - last_session_check > 30:
+                    if not state.valid_session(token):
+                        return
+                    last_session_check = now
+                try:
+                    payload = json.loads(line.decode("utf-8"))
+                    apply_control_event(state, payload)
+                except Exception:
+                    continue
+        except OSError:
+            return
+        finally:
+            try:
+                conn.close()
+            except OSError:
+                pass
+
+    def worker() -> None:
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server:
+                server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                server.bind((bind_host, control_port))
+                server.listen(5)
+                while True:
+                    conn, address = server.accept()
+                    threading.Thread(target=handle_client, args=(conn, address), daemon=True).start()
+        except OSError as exc:
+            print(f"Nao consegui iniciar canal rapido de controle na porta {control_port}: {exc}")
 
     threading.Thread(target=worker, daemon=True).start()
 
@@ -1210,6 +1275,7 @@ def serve() -> None:
     start_discovery_beacon(config)
 
     state = RemoteState(config)
+    start_control_socket_server(state, config)
     RemoteRequestHandler.state = state
     bind_host = str(config.get("bind_host", "0.0.0.0"))
     port = int(config.get("port", 8765))
@@ -1224,6 +1290,7 @@ def serve() -> None:
     print("Enderecos para usar no laptop:")
     print(safe_urls)
     print(f"Senha padrao: {EASY_PASSWORD}")
+    print(f"Canal rapido de mouse/teclado: porta {int(config.get('control_port', CONTROL_PORT))}")
     print("O laptop tenta encontrar este Host automaticamente na rede.")
     print()
     print("Deixe esta janela aberta enquanto estiver controlando.")

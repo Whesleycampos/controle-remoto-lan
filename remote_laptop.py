@@ -31,6 +31,7 @@ TRANSFER_DIR = Path.home() / "Downloads" / "ControleRemotoLAN"
 DEFAULT_PORT = 8765
 DEFAULT_PASSWORD = "controle"
 DISCOVERY_PORT = 8766
+CONTROL_PORT = 8767
 
 
 def load_config() -> dict[str, Any]:
@@ -238,6 +239,7 @@ class RemoteWindow:
         self.login_lock = threading.Lock()
         self.view_lock = threading.Lock()
         self.stream_generation = 0
+        self.control_fast_connected = False
         self.latest_image: Image.Image | None = None
         self.tk_image: ImageTk.PhotoImage | None = None
         self.image_item: int | None = None
@@ -649,6 +651,11 @@ class RemoteWindow:
     def auth_headers(self) -> dict[str, str]:
         return {"X-Remote-Token": self.current_token()}
 
+    def control_socket_address(self) -> tuple[str, int]:
+        parsed = urllib.parse.urlparse(self.base_url)
+        host = parsed.hostname or self.base_url.replace("http://", "").split(":", 1)[0]
+        return host, CONTROL_PORT
+
     def relogin(self) -> bool:
         with self.login_lock:
             if self.stop_event.is_set():
@@ -746,8 +753,55 @@ class RemoteWindow:
                 pass
 
     def control_worker(self) -> None:
-        url = f"{self.base_url}/control"
         while not self.stop_event.is_set():
+            if self.fast_control_loop():
+                continue
+            self.http_control_loop()
+
+    def fast_control_loop(self) -> bool:
+        host, port = self.control_socket_address()
+        try:
+            with socket.create_connection((host, port), timeout=4) as sock:
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                sock.settimeout(5)
+                file = sock.makefile("rwb", buffering=0)
+                hello = json.dumps({"token": self.current_token()}, separators=(",", ":")).encode("utf-8") + b"\n"
+                file.write(hello)
+                response = file.readline(4096)
+                if not response:
+                    return False
+                try:
+                    data = json.loads(response.decode("utf-8"))
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    return False
+                if not data.get("ok"):
+                    if self.relogin():
+                        return True
+                    return False
+                self.control_fast_connected = True
+                self.schedule_ui(lambda: self.show_overlay("Mouse sincronizado em modo rapido"))
+                self.schedule_ui_later(1600, self.hide_overlay)
+                while not self.stop_event.is_set():
+                    try:
+                        payload = self.control_queue.get(timeout=0.5)
+                    except queue.Empty:
+                        continue
+                    if payload.get("type") == "move":
+                        payload = self.latest_move_payload(payload)
+                    line = json.dumps(payload, separators=(",", ":")).encode("utf-8") + b"\n"
+                    file.write(line)
+                return True
+        except Exception:
+            if self.control_fast_connected:
+                self.control_fast_connected = False
+                self.schedule_ui(lambda: self.show_overlay("Canal rapido caiu; usando fallback"))
+                self.schedule_ui_later(2200, self.hide_overlay)
+            return False
+
+    def http_control_loop(self) -> None:
+        url = f"{self.base_url}/control"
+        fallback_until = time.time() + 3.0
+        while not self.stop_event.is_set() and time.time() < fallback_until:
             try:
                 payload = self.control_queue.get(timeout=0.2)
             except queue.Empty:
