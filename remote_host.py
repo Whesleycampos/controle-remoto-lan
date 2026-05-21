@@ -35,9 +35,9 @@ QUALITY_PROFILES: dict[str, dict[str, float | int]] = {
 DEFAULT_CONFIG: dict[str, Any] = {
     "bind_host": "0.0.0.0",
     "port": 8765,
-    "fps": QUALITY_PROFILES["balanced"]["fps"],
-    "jpeg_quality": QUALITY_PROFILES["balanced"]["jpeg_quality"],
-    "scale": QUALITY_PROFILES["balanced"]["scale"],
+    "fps": QUALITY_PROFILES["high"]["fps"],
+    "jpeg_quality": QUALITY_PROFILES["high"]["jpeg_quality"],
+    "scale": QUALITY_PROFILES["high"]["scale"],
     "monitor_index": 1,
     "session_hours": 87600,
     "allow_private_network_only": True,

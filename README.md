@@ -59,11 +59,11 @@ O Controle do laptop tenta reconectar automaticamente se o Wi-Fi oscilar, se o s
 
 ## Qualidade da imagem
 
-O Host usa modo equilibrado por padrao: escala 90%, JPEG 82 e 10 FPS. Isso reduz atraso no Wi-Fi sem voltar para a imagem muito ruim.
+O Host usa qualidade alta por padrao: escala 100%, JPEG 90 e 12 FPS. A imagem fica mais bonita, mas downloads pesados podem aumentar o atraso.
 
 Voce pode trocar o perfil no computador principal:
 
-- `configurar_modo_equilibrado_host.bat`: melhor equilibrio para uso normal.
+- `configurar_modo_equilibrado_host.bat`: reduz um pouco o uso de rede.
 - `configurar_baixa_latencia_host.bat`: menor atraso, imagem um pouco mais simples.
 - `configurar_qualidade_alta_host.bat`: mais nitidez, mas pode atrasar se o Wi-Fi estiver ocupado.
 
