@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import io
 import json
 import queue
@@ -12,11 +13,12 @@ from typing import Any
 
 try:
     import tkinter as tk
-    from tkinter import messagebox
+    from tkinter import filedialog, messagebox
 except ImportError as exc:
     raise SystemExit("Tkinter nao esta disponivel nesta instalacao do Python.") from exc
 
 try:
+    import pyperclip
     import requests
     from PIL import Image, ImageTk
 except ImportError as exc:
@@ -25,6 +27,7 @@ except ImportError as exc:
 
 APP_DIR = Path(__file__).resolve().parent
 CONFIG_PATH = APP_DIR / "laptop_config.json"
+TRANSFER_DIR = Path.home() / "Downloads" / "ControleRemotoLAN"
 DEFAULT_PORT = 8765
 DEFAULT_PASSWORD = "controle"
 DISCOVERY_PORT = 8766
@@ -241,7 +244,11 @@ class RemoteWindow:
         self.overlay_item: int | None = None
         self.view_bar: tk.Frame | None = None
         self.view_buttons: dict[str, tk.Button] = {}
+        self.transfer_bar: tk.Frame | None = None
         self.exit_button: tk.Button | None = None
+        self.clipboard_enabled = True
+        self.last_host_clipboard = ""
+        self.last_local_clipboard = self.local_clipboard_text()
         self.display_box = (0, 0, 1, 1)
         self.last_move_sent = 0.0
         self.pressed_keys: set[str] = set()
@@ -256,6 +263,7 @@ class RemoteWindow:
         self.canvas.focus_set()
 
         self.create_view_buttons()
+        self.create_transfer_buttons()
 
         self.exit_button = tk.Button(
             self.root,
@@ -277,6 +285,7 @@ class RemoteWindow:
 
         threading.Thread(target=self.stream_worker, daemon=True).start()
         threading.Thread(target=self.control_worker, daemon=True).start()
+        threading.Thread(target=self.clipboard_worker, daemon=True).start()
         self.root.after(15, self.draw_loop)
         self.root.after(5000, self.hide_overlay)
 
@@ -407,6 +416,199 @@ class RemoteWindow:
                 button.configure(bg="#2563eb", fg="#ffffff", activebackground="#1d4ed8", activeforeground="#ffffff")
             else:
                 button.configure(bg="#374151", fg="#f9fafb", activebackground="#4b5563", activeforeground="#ffffff")
+
+    def create_transfer_buttons(self) -> None:
+        self.transfer_bar = tk.Frame(self.root, bg="#111827")
+        self.transfer_bar.place(x=14, y=54, anchor="nw")
+        tk.Button(
+            self.transfer_bar,
+            text="Enviar arquivo",
+            command=self.choose_files_to_upload,
+            bg="#374151",
+            fg="#f9fafb",
+            activebackground="#4b5563",
+            activeforeground="#ffffff",
+            relief="flat",
+            padx=12,
+            pady=6,
+            cursor="hand2",
+        ).pack(side="left", padx=(0, 6))
+        tk.Button(
+            self.transfer_bar,
+            text="Baixar copiados",
+            command=self.download_copied_files,
+            bg="#374151",
+            fg="#f9fafb",
+            activebackground="#4b5563",
+            activeforeground="#ffffff",
+            relief="flat",
+            padx=12,
+            pady=6,
+            cursor="hand2",
+        ).pack(side="left", padx=(0, 6))
+
+    def local_clipboard_text(self) -> str:
+        try:
+            value = pyperclip.paste()
+        except Exception:
+            return ""
+        return value if isinstance(value, str) else ""
+
+    def set_local_clipboard_text(self, text: str) -> None:
+        try:
+            pyperclip.copy(text)
+        except Exception:
+            pass
+
+    def clipboard_worker(self) -> None:
+        while not self.stop_event.is_set():
+            if not self.clipboard_enabled:
+                self.stop_event.wait(1)
+                continue
+
+            try:
+                response = self.session.get(
+                    f"{self.base_url}/clipboard",
+                    headers=self.auth_headers(),
+                    timeout=3,
+                )
+                if response.status_code in (401, 403):
+                    self.relogin()
+                elif response.ok:
+                    host_text = str(response.json().get("text", ""))
+                    if host_text and host_text != self.last_host_clipboard and host_text != self.local_clipboard_text():
+                        self.set_local_clipboard_text(host_text)
+                        self.last_host_clipboard = host_text
+                        self.last_local_clipboard = host_text
+                        self.schedule_ui(lambda: self.show_overlay("Texto copiado do Host para o laptop"))
+                        self.schedule_ui_later(1600, self.hide_overlay)
+            except Exception:
+                pass
+
+            local_text = self.local_clipboard_text()
+            if local_text and local_text != self.last_local_clipboard and local_text != self.last_host_clipboard:
+                try:
+                    response = self.session.post(
+                        f"{self.base_url}/clipboard",
+                        headers=self.auth_headers(),
+                        json={"text": local_text},
+                        timeout=3,
+                    )
+                    if response.status_code in (401, 403):
+                        self.relogin()
+                    elif response.ok:
+                        self.last_local_clipboard = local_text
+                        self.last_host_clipboard = local_text
+                except Exception:
+                    pass
+
+            self.stop_event.wait(1)
+
+    def choose_files_to_upload(self) -> None:
+        paths = filedialog.askopenfilenames(title="Enviar arquivo para o computador remoto")
+        if not paths:
+            self.canvas.focus_set()
+            return
+        self.canvas.focus_set()
+        threading.Thread(target=self.upload_files_worker, args=(list(paths),), daemon=True).start()
+
+    def upload_files_worker(self, paths: list[str]) -> None:
+        for index, path_text in enumerate(paths, start=1):
+            path = Path(path_text)
+            if not path.is_file():
+                continue
+            self.schedule_ui(lambda name=path.name, index=index, total=len(paths): self.show_overlay(f"Enviando {index}/{total}: {name}"))
+            try:
+                start = self.session.post(
+                    f"{self.base_url}/files/upload-start",
+                    headers=self.auth_headers(),
+                    json={"name": path.name, "size": path.stat().st_size},
+                    timeout=10,
+                )
+                if start.status_code in (401, 403):
+                    self.relogin()
+                    start = self.session.post(
+                        f"{self.base_url}/files/upload-start",
+                        headers=self.auth_headers(),
+                        json={"name": path.name, "size": path.stat().st_size},
+                        timeout=10,
+                    )
+                start.raise_for_status()
+                upload_id = start.json()["upload_id"]
+                with path.open("rb") as file:
+                    while not self.stop_event.is_set():
+                        chunk = file.read(768 * 1024)
+                        if not chunk:
+                            break
+                        payload = {
+                            "upload_id": upload_id,
+                            "data": base64.b64encode(chunk).decode("ascii"),
+                        }
+                        response = self.session.post(
+                            f"{self.base_url}/files/upload-chunk",
+                            headers=self.auth_headers(),
+                            json=payload,
+                            timeout=20,
+                        )
+                        response.raise_for_status()
+                finish = self.session.post(
+                    f"{self.base_url}/files/upload-finish",
+                    headers=self.auth_headers(),
+                    json={"upload_id": upload_id},
+                    timeout=10,
+                )
+                finish.raise_for_status()
+            except Exception as exc:
+                self.schedule_ui(lambda exc=exc: self.show_overlay(f"Falha ao enviar arquivo: {exc}"))
+                self.schedule_ui_later(3500, self.hide_overlay)
+                return
+        self.schedule_ui(lambda: self.show_overlay("Arquivo(s) enviados para Downloads\\ControleRemotoLAN no Host"))
+        self.schedule_ui_later(3500, self.hide_overlay)
+
+    def download_copied_files(self) -> None:
+        self.canvas.focus_set()
+        threading.Thread(target=self.download_copied_files_worker, daemon=True).start()
+
+    def download_copied_files_worker(self) -> None:
+        self.schedule_ui(lambda: self.show_overlay("Baixando arquivos copiados no Host..."))
+        try:
+            response = self.session.get(
+                f"{self.base_url}/files/download-copied",
+                headers=self.auth_headers(),
+                stream=True,
+                timeout=(10, 120),
+            )
+            if response.status_code in (401, 403):
+                self.relogin()
+                response = self.session.get(
+                    f"{self.base_url}/files/download-copied",
+                    headers=self.auth_headers(),
+                    stream=True,
+                    timeout=(10, 120),
+                )
+            response.raise_for_status()
+            TRANSFER_DIR.mkdir(parents=True, exist_ok=True)
+            name = self.filename_from_response(response) or f"arquivos-copiados-{time.strftime('%Y%m%d-%H%M%S')}.zip"
+            path = TRANSFER_DIR / name
+            with path.open("wb") as file:
+                for chunk in response.iter_content(chunk_size=1024 * 1024):
+                    if chunk:
+                        file.write(chunk)
+        except Exception as exc:
+            self.schedule_ui(lambda exc=exc: self.show_overlay(f"Nao consegui baixar copiados: {exc}"))
+            self.schedule_ui_later(4000, self.hide_overlay)
+            return
+        self.set_local_clipboard_text(str(path))
+        self.schedule_ui(lambda: self.show_overlay(f"Baixado no laptop: {path.name}"))
+        self.schedule_ui_later(4000, self.hide_overlay)
+
+    def filename_from_response(self, response: requests.Response) -> str | None:
+        disposition = response.headers.get("Content-Disposition", "")
+        marker = "filename="
+        if marker not in disposition:
+            return None
+        name = disposition.split(marker, 1)[1].strip().strip('"')
+        return Path(name).name or None
 
     def show_overlay(self, text: str) -> None:
         self.hide_overlay()
@@ -635,6 +837,8 @@ class RemoteWindow:
             self.canvas.tag_raise(self.overlay_item)
         if self.view_bar is not None:
             self.view_bar.lift()
+        if self.transfer_bar is not None:
+            self.transfer_bar.lift()
         if self.exit_button is not None:
             self.exit_button.lift()
 

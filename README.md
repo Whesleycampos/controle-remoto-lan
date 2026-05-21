@@ -49,6 +49,15 @@ Se o computador Host tiver dois monitores, o laptop mostra tres botoes no canto 
 
 O Controle do laptop tenta reconectar automaticamente se o Wi-Fi oscilar, se o streaming cair ou se a sessao precisar ser renovada. Ele mantem a janela aberta e so fecha quando voce encerra pelo laptop.
 
+## Copiar, colar e arquivos
+
+Enquanto estiver conectado, texto copiado no computador Host e sincronizado automaticamente para o clipboard do laptop. O contrario tambem funciona: texto copiado no laptop vai para o clipboard do Host, facilitando colar dos dois lados.
+
+No canto superior esquerdo do laptop tambem existem botoes de arquivo:
+
+- `Enviar arquivo`: escolhe arquivo(s) do laptop e envia para `Downloads\ControleRemotoLAN` no computador Host.
+- `Baixar copiados`: primeiro copie arquivo(s) no computador Host; depois clique nesse botao no laptop para baixar um `.zip` em `Downloads\ControleRemotoLAN`.
+
 ## Se nao conectar
 
 - Confirme que os dois computadores estao no mesmo Wi-Fi.

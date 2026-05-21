@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import getpass
 import hashlib
 import hmac
@@ -10,10 +11,13 @@ import ipaddress
 import json
 import secrets
 import socket
+import subprocess
 import sys
 import threading
 import time
 import urllib.parse
+import uuid
+import zipfile
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -23,6 +27,7 @@ from typing import Any
 APP_DIR = Path(__file__).resolve().parent
 CONFIG_PATH = APP_DIR / "host_config.json"
 PASSWORD_NOTE_PATH = APP_DIR / "SENHA_GERADA_HOST.txt"
+TRANSFER_DIR = Path.home() / "Downloads" / "ControleRemotoLAN"
 EASY_PASSWORD = "controle"
 DISCOVERY_PORT = 8766
 
@@ -47,6 +52,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
 PIL_Image = None
 mss_module = None
 pyautogui_module = None
+pyperclip_module = None
 
 
 def make_password_hash(password: str, salt_hex: str | None = None) -> tuple[str, str]:
@@ -145,12 +151,13 @@ def apply_quality_profile(profile_name: str) -> None:
 
 
 def load_runtime_dependencies() -> None:
-    global PIL_Image, mss_module, pyautogui_module
+    global PIL_Image, mss_module, pyautogui_module, pyperclip_module
 
     try:
         from PIL import Image
         import mss
         import pyautogui
+        import pyperclip
     except ImportError as exc:
         print("Dependencias do Host nao instaladas.")
         print("Rode instalar_host.bat neste computador e tente novamente.")
@@ -160,8 +167,95 @@ def load_runtime_dependencies() -> None:
     PIL_Image = Image
     mss_module = mss
     pyautogui_module = pyautogui
+    pyperclip_module = pyperclip
     pyautogui.PAUSE = 0
     pyautogui.FAILSAFE = False
+
+
+def safe_filename(name: str) -> str:
+    candidate = Path(name or "arquivo").name.strip()
+    blocked = '<>:"/\\|?*'
+    cleaned = "".join("_" if char in blocked or ord(char) < 32 else char for char in candidate)
+    return cleaned.strip(" .") or "arquivo"
+
+
+def unique_transfer_path(file_name: str) -> Path:
+    TRANSFER_DIR.mkdir(parents=True, exist_ok=True)
+    name = safe_filename(file_name)
+    path = TRANSFER_DIR / name
+    if not path.exists():
+        return path
+    stem = path.stem
+    suffix = path.suffix
+    timestamp = time.strftime("%Y%m%d-%H%M%S")
+    return TRANSFER_DIR / f"{stem}-{timestamp}{suffix}"
+
+
+def clipboard_text() -> str:
+    assert pyperclip_module is not None
+    try:
+        value = pyperclip_module.paste()
+    except Exception:
+        return ""
+    return value if isinstance(value, str) else ""
+
+
+def set_clipboard_text(text: str) -> None:
+    assert pyperclip_module is not None
+    pyperclip_module.copy(text)
+
+
+def clipboard_file_paths() -> list[Path]:
+    command = "Get-Clipboard -Format FileDropList | ForEach-Object { $_.FullName }"
+    try:
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+    if result.returncode != 0:
+        return []
+    paths: list[Path] = []
+    for line in result.stdout.splitlines():
+        text = line.strip()
+        if not text:
+            continue
+        path = Path(text)
+        if path.exists():
+            paths.append(path)
+    return paths
+
+
+def path_size(path: Path) -> int:
+    if path.is_file():
+        try:
+            return path.stat().st_size
+        except OSError:
+            return 0
+    total = 0
+    if path.is_dir():
+        for item in path.rglob("*"):
+            if item.is_file():
+                try:
+                    total += item.stat().st_size
+                except OSError:
+                    pass
+    return total
+
+
+def write_paths_zip(paths: list[Path], zip_path: Path) -> None:
+    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
+        for path in paths:
+            if path.is_file():
+                archive.write(path, arcname=path.name)
+            elif path.is_dir():
+                root_name = path.name
+                for item in path.rglob("*"):
+                    if item.is_file():
+                        archive.write(item, arcname=str(Path(root_name) / item.relative_to(path)))
 
 
 def is_private_client(ip_text: str) -> bool:
@@ -581,6 +675,7 @@ class RemoteState:
         self.config = config
         self.sessions: dict[str, float] = {}
         self.failed_logins: dict[str, list[float]] = {}
+        self.uploads: dict[str, Path] = {}
         self.lock = threading.Lock()
         self._monitors_cache: tuple[float, list[dict[str, int]]] | None = None
 
@@ -619,6 +714,23 @@ class RemoteState:
     def clear_failures(self, ip: str) -> None:
         with self.lock:
             self.failed_logins.pop(ip, None)
+
+    def create_upload(self, file_name: str) -> tuple[str, Path]:
+        upload_id = uuid.uuid4().hex
+        path = unique_transfer_path(file_name)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"")
+        with self.lock:
+            self.uploads[upload_id] = path
+        return upload_id, path
+
+    def upload_path(self, upload_id: str) -> Path | None:
+        with self.lock:
+            return self.uploads.get(upload_id)
+
+    def finish_upload(self, upload_id: str) -> Path | None:
+        with self.lock:
+            return self.uploads.pop(upload_id, None)
 
     def monitors(self) -> list[dict[str, int]]:
         now = time.time()
@@ -750,12 +862,12 @@ class RemoteRequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def read_json(self) -> dict[str, Any] | None:
+    def read_json(self, max_size: int = 1024 * 1024) -> dict[str, Any] | None:
         try:
             length = int(self.headers.get("Content-Length", "0"))
         except ValueError:
             return None
-        if length <= 0 or length > 1024 * 1024:
+        if length <= 0 or length > max_size:
             return None
         try:
             return json.loads(self.rfile.read(length).decode("utf-8"))
@@ -792,6 +904,21 @@ class RemoteRequestHandler(BaseHTTPRequestHandler):
                 return
             self.handle_stream()
             return
+        if parsed.path == "/clipboard":
+            if not self.require_session():
+                return
+            self.send_json(HTTPStatus.OK, {"text": clipboard_text()})
+            return
+        if parsed.path == "/files/clipboard-list":
+            if not self.require_session():
+                return
+            self.handle_clipboard_file_list()
+            return
+        if parsed.path == "/files/download-copied":
+            if not self.require_session():
+                return
+            self.handle_download_copied_files()
+            return
 
         self.send_json(HTTPStatus.NOT_FOUND, {"error": "nao encontrado"})
 
@@ -808,6 +935,26 @@ class RemoteRequestHandler(BaseHTTPRequestHandler):
             if not self.require_session():
                 return
             self.handle_control()
+            return
+        if parsed.path == "/clipboard":
+            if not self.require_session():
+                return
+            self.handle_set_clipboard()
+            return
+        if parsed.path == "/files/upload-start":
+            if not self.require_session():
+                return
+            self.handle_upload_start()
+            return
+        if parsed.path == "/files/upload-chunk":
+            if not self.require_session():
+                return
+            self.handle_upload_chunk()
+            return
+        if parsed.path == "/files/upload-finish":
+            if not self.require_session():
+                return
+            self.handle_upload_finish()
             return
 
         self.send_json(HTTPStatus.NOT_FOUND, {"error": "nao encontrado"})
@@ -841,6 +988,109 @@ class RemoteRequestHandler(BaseHTTPRequestHandler):
             return
 
         self.send_json(HTTPStatus.OK, {"ok": True})
+
+    def handle_set_clipboard(self) -> None:
+        payload = self.read_json(2 * 1024 * 1024)
+        if payload is None:
+            self.send_json(HTTPStatus.BAD_REQUEST, {"error": "json invalido"})
+            return
+        text = str(payload.get("text", ""))
+        try:
+            set_clipboard_text(text)
+        except Exception as exc:
+            self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+            return
+        self.send_json(HTTPStatus.OK, {"ok": True})
+
+    def handle_clipboard_file_list(self) -> None:
+        paths = clipboard_file_paths()
+        files = [
+            {
+                "name": path.name,
+                "path": str(path),
+                "is_dir": path.is_dir(),
+                "size": path_size(path),
+            }
+            for path in paths
+        ]
+        self.send_json(HTTPStatus.OK, {"files": files, "count": len(files)})
+
+    def handle_download_copied_files(self) -> None:
+        paths = clipboard_file_paths()
+        if not paths:
+            self.send_json(HTTPStatus.BAD_REQUEST, {"error": "nenhum arquivo copiado no Host"})
+            return
+        temp_path = TRANSFER_DIR / f"arquivos-copiados-{time.strftime('%Y%m%d-%H%M%S')}.zip"
+        TRANSFER_DIR.mkdir(parents=True, exist_ok=True)
+        try:
+            write_paths_zip(paths, temp_path)
+            self.send_file(temp_path, "application/zip", temp_path.name, delete_after=True)
+        except Exception as exc:
+            try:
+                temp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+
+    def send_file(self, path: Path, content_type: str, download_name: str, delete_after: bool = False) -> None:
+        try:
+            size = path.stat().st_size
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(size))
+            self.send_header("Content-Disposition", f'attachment; filename="{safe_filename(download_name)}"')
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            with path.open("rb") as file:
+                while True:
+                    chunk = file.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+        finally:
+            if delete_after:
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+
+    def handle_upload_start(self) -> None:
+        payload = self.read_json()
+        if not payload:
+            self.send_json(HTTPStatus.BAD_REQUEST, {"error": "json invalido"})
+            return
+        upload_id, path = self.state.create_upload(str(payload.get("name", "arquivo")))
+        self.send_json(HTTPStatus.OK, {"upload_id": upload_id, "path": str(path)})
+
+    def handle_upload_chunk(self) -> None:
+        payload = self.read_json(2 * 1024 * 1024)
+        if not payload:
+            self.send_json(HTTPStatus.BAD_REQUEST, {"error": "json invalido"})
+            return
+        upload_id = str(payload.get("upload_id", ""))
+        path = self.state.upload_path(upload_id)
+        if path is None:
+            self.send_json(HTTPStatus.NOT_FOUND, {"error": "upload nao encontrado"})
+            return
+        try:
+            data = base64.b64decode(str(payload.get("data", "")), validate=True)
+            with path.open("ab") as file:
+                file.write(data)
+        except Exception as exc:
+            self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+            return
+        self.send_json(HTTPStatus.OK, {"ok": True, "received": path.stat().st_size})
+
+    def handle_upload_finish(self) -> None:
+        payload = self.read_json()
+        if not payload:
+            self.send_json(HTTPStatus.BAD_REQUEST, {"error": "json invalido"})
+            return
+        path = self.state.finish_upload(str(payload.get("upload_id", "")))
+        if path is None:
+            self.send_json(HTTPStatus.NOT_FOUND, {"error": "upload nao encontrado"})
+            return
+        self.send_json(HTTPStatus.OK, {"ok": True, "path": str(path), "size": path.stat().st_size})
 
     def handle_stream(self) -> None:
         assert PIL_Image is not None
