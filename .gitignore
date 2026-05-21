@@ -1,0 +1,10 @@
+.venv_host/
+.venv_laptop/
+__pycache__/
+*.pyc
+host_config.json
+laptop_config.json
+SENHA_GERADA_HOST.txt
+build/
+dist/
+*.spec
