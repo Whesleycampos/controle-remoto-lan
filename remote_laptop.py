@@ -599,7 +599,7 @@ class RemoteWindow:
         top = (canvas_height - display_height) // 2
         self.display_box = (left, top, display_width, display_height)
 
-        resized = self.latest_image.resize((display_width, display_height), Image.Resampling.BILINEAR)
+        resized = self.latest_image.resize((display_width, display_height), Image.Resampling.LANCZOS)
         self.tk_image = ImageTk.PhotoImage(resized)
         if self.image_item is None:
             self.image_item = self.canvas.create_image(left, top, image=self.tk_image, anchor="nw")

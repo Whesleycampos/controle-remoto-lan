@@ -57,6 +57,12 @@ O Controle do laptop tenta reconectar automaticamente se o Wi-Fi oscilar, se o s
 - Permita o aplicativo no Windows Firewall para redes privadas.
 - Se precisar liberar manualmente, execute `liberar_firewall_host_admin.bat` como Administrador no computador Host.
 
+## Qualidade da imagem
+
+O Host usa qualidade alta por padrao: escala 100% e JPEG 90 com texto mais nitido. Se voce tiver uma versao antiga instalada, execute `configurar_qualidade_alta_host.bat` no computador principal e reinicie o Host.
+
+Se a imagem ficar boa mas a conexao ficar pesada no Wi-Fi, reduza a resolucao do monitor principal no Windows ou use o foco `Tela 1` / `Tela 2` em vez de `Duas telas`.
+
 ## Uso pelo navegador
 
 Tambem e possivel controlar pelo navegador do laptop:

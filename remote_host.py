@@ -30,8 +30,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "bind_host": "0.0.0.0",
     "port": 8765,
     "fps": 12,
-    "jpeg_quality": 65,
-    "scale": 0.75,
+    "jpeg_quality": 90,
+    "scale": 1.0,
     "monitor_index": 1,
     "session_hours": 87600,
     "allow_private_network_only": True,
@@ -77,6 +77,16 @@ def load_config() -> dict[str, Any]:
             merged["session_hours"] = DEFAULT_CONFIG["session_hours"]
     except (TypeError, ValueError):
         merged["session_hours"] = DEFAULT_CONFIG["session_hours"]
+    try:
+        if int(merged.get("jpeg_quality", 0)) < int(DEFAULT_CONFIG["jpeg_quality"]):
+            merged["jpeg_quality"] = DEFAULT_CONFIG["jpeg_quality"]
+    except (TypeError, ValueError):
+        merged["jpeg_quality"] = DEFAULT_CONFIG["jpeg_quality"]
+    try:
+        if float(merged.get("scale", 0)) < float(DEFAULT_CONFIG["scale"]):
+            merged["scale"] = DEFAULT_CONFIG["scale"]
+    except (TypeError, ValueError):
+        merged["scale"] = DEFAULT_CONFIG["scale"]
     return merged
 
 
@@ -124,6 +134,14 @@ def prompt_new_password() -> str:
 
 def set_easy_password() -> str:
     return create_or_reset_config(reset=True, password=EASY_PASSWORD)
+
+
+def apply_high_quality_config() -> None:
+    config = load_config()
+    config["jpeg_quality"] = DEFAULT_CONFIG["jpeg_quality"]
+    config["scale"] = DEFAULT_CONFIG["scale"]
+    config["fps"] = DEFAULT_CONFIG["fps"]
+    save_config(config)
 
 
 def load_runtime_dependencies() -> None:
@@ -682,8 +700,8 @@ class RemoteState:
             "active_view": monitor["id"],
             "views": self.available_views(),
             "fps": int(self.config.get("fps", 12)),
-            "quality": int(self.config.get("jpeg_quality", 65)),
-            "scale": float(self.config.get("scale", 0.75)),
+            "quality": int(self.config.get("jpeg_quality", DEFAULT_CONFIG["jpeg_quality"])),
+            "scale": float(self.config.get("scale", DEFAULT_CONFIG["scale"])),
             "hostname": socket.gethostname(),
         }
 
@@ -829,8 +847,8 @@ class RemoteRequestHandler(BaseHTTPRequestHandler):
         assert mss_module is not None
 
         fps = max(1, min(30, int(self.state.config.get("fps", 12))))
-        quality = max(25, min(90, int(self.state.config.get("jpeg_quality", 65))))
-        scale = max(0.2, min(1.0, float(self.state.config.get("scale", 0.75))))
+        quality = max(25, min(95, int(self.state.config.get("jpeg_quality", DEFAULT_CONFIG["jpeg_quality"]))))
+        scale = max(0.2, min(1.0, float(self.state.config.get("scale", DEFAULT_CONFIG["scale"]))))
         delay = 1.0 / fps
         parsed = urllib.parse.urlparse(self.path)
         query = urllib.parse.parse_qs(parsed.query)
@@ -861,7 +879,7 @@ class RemoteRequestHandler(BaseHTTPRequestHandler):
                         image = image.resize((width, height), resample=PIL_Image.Resampling.BILINEAR)
 
                     output = io.BytesIO()
-                    image.save(output, format="JPEG", quality=quality, optimize=False)
+                    image.save(output, format="JPEG", quality=quality, optimize=False, subsampling=0)
                     frame = output.getvalue()
                     self.wfile.write(b"--frame\r\n")
                     self.wfile.write(b"Content-Type: image/jpeg\r\n")
@@ -975,8 +993,14 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Host do Controle Remoto LAN")
     parser.add_argument("--init", action="store_true", help="cria a configuracao inicial se ela nao existir")
     parser.add_argument("--easy-access", action="store_true", help="define a senha padrao facil")
+    parser.add_argument("--high-quality", action="store_true", help="aplica imagem em qualidade alta")
     parser.add_argument("--reset-password", action="store_true", help="troca a senha do Host")
     args = parser.parse_args()
+
+    if args.high_quality:
+        apply_high_quality_config()
+        print("Qualidade alta aplicada: escala 100%, JPEG 90.")
+        return
 
     if args.easy_access:
         password = set_easy_password()

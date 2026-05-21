@@ -5,6 +5,9 @@ __pycache__/
 host_config.json
 laptop_config.json
 SENHA_GERADA_HOST.txt
+host-output.log
+host-error.log
+host.pid
 build/
 dist/
 *.spec
