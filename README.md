@@ -59,9 +59,15 @@ O Controle do laptop tenta reconectar automaticamente se o Wi-Fi oscilar, se o s
 
 ## Qualidade da imagem
 
-O Host usa qualidade alta por padrao: escala 100% e JPEG 90 com texto mais nitido. Se voce tiver uma versao antiga instalada, execute `configurar_qualidade_alta_host.bat` no computador principal e reinicie o Host.
+O Host usa modo equilibrado por padrao: escala 90%, JPEG 82 e 10 FPS. Isso reduz atraso no Wi-Fi sem voltar para a imagem muito ruim.
 
-Se a imagem ficar boa mas a conexao ficar pesada no Wi-Fi, reduza a resolucao do monitor principal no Windows ou use o foco `Tela 1` / `Tela 2` em vez de `Duas telas`.
+Voce pode trocar o perfil no computador principal:
+
+- `configurar_modo_equilibrado_host.bat`: melhor equilibrio para uso normal.
+- `configurar_baixa_latencia_host.bat`: menor atraso, imagem um pouco mais simples.
+- `configurar_qualidade_alta_host.bat`: mais nitidez, mas pode atrasar se o Wi-Fi estiver ocupado.
+
+Depois de trocar o perfil, reinicie o Host. Se estiver usando `Duas telas`, a imagem usa muito mais rede; para menor atraso, use `Tela 1` ou `Tela 2`.
 
 ## Uso pelo navegador
 

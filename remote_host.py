@@ -26,12 +26,18 @@ PASSWORD_NOTE_PATH = APP_DIR / "SENHA_GERADA_HOST.txt"
 EASY_PASSWORD = "controle"
 DISCOVERY_PORT = 8766
 
+QUALITY_PROFILES: dict[str, dict[str, float | int]] = {
+    "balanced": {"fps": 10, "jpeg_quality": 82, "scale": 0.9},
+    "high": {"fps": 12, "jpeg_quality": 90, "scale": 1.0},
+    "low_latency": {"fps": 10, "jpeg_quality": 74, "scale": 0.78},
+}
+
 DEFAULT_CONFIG: dict[str, Any] = {
     "bind_host": "0.0.0.0",
     "port": 8765,
-    "fps": 12,
-    "jpeg_quality": 90,
-    "scale": 1.0,
+    "fps": QUALITY_PROFILES["balanced"]["fps"],
+    "jpeg_quality": QUALITY_PROFILES["balanced"]["jpeg_quality"],
+    "scale": QUALITY_PROFILES["balanced"]["scale"],
     "monitor_index": 1,
     "session_hours": 87600,
     "allow_private_network_only": True,
@@ -77,16 +83,9 @@ def load_config() -> dict[str, Any]:
             merged["session_hours"] = DEFAULT_CONFIG["session_hours"]
     except (TypeError, ValueError):
         merged["session_hours"] = DEFAULT_CONFIG["session_hours"]
-    try:
-        if int(merged.get("jpeg_quality", 0)) < int(DEFAULT_CONFIG["jpeg_quality"]):
-            merged["jpeg_quality"] = DEFAULT_CONFIG["jpeg_quality"]
-    except (TypeError, ValueError):
-        merged["jpeg_quality"] = DEFAULT_CONFIG["jpeg_quality"]
-    try:
-        if float(merged.get("scale", 0)) < float(DEFAULT_CONFIG["scale"]):
-            merged["scale"] = DEFAULT_CONFIG["scale"]
-    except (TypeError, ValueError):
-        merged["scale"] = DEFAULT_CONFIG["scale"]
+    merged["fps"] = max(1, min(30, int(float(merged.get("fps", DEFAULT_CONFIG["fps"])))))
+    merged["jpeg_quality"] = max(25, min(95, int(float(merged.get("jpeg_quality", DEFAULT_CONFIG["jpeg_quality"])))))
+    merged["scale"] = max(0.2, min(1.0, float(merged.get("scale", DEFAULT_CONFIG["scale"]))))
     return merged
 
 
@@ -136,11 +135,12 @@ def set_easy_password() -> str:
     return create_or_reset_config(reset=True, password=EASY_PASSWORD)
 
 
-def apply_high_quality_config() -> None:
+def apply_quality_profile(profile_name: str) -> None:
+    profile = QUALITY_PROFILES[profile_name]
     config = load_config()
-    config["jpeg_quality"] = DEFAULT_CONFIG["jpeg_quality"]
-    config["scale"] = DEFAULT_CONFIG["scale"]
-    config["fps"] = DEFAULT_CONFIG["fps"]
+    config["jpeg_quality"] = profile["jpeg_quality"]
+    config["scale"] = profile["scale"]
+    config["fps"] = profile["fps"]
     save_config(config)
 
 
@@ -994,12 +994,24 @@ def main() -> None:
     parser.add_argument("--init", action="store_true", help="cria a configuracao inicial se ela nao existir")
     parser.add_argument("--easy-access", action="store_true", help="define a senha padrao facil")
     parser.add_argument("--high-quality", action="store_true", help="aplica imagem em qualidade alta")
+    parser.add_argument("--balanced", action="store_true", help="aplica qualidade equilibrada")
+    parser.add_argument("--low-latency", action="store_true", help="aplica menor atraso com menos uso de rede")
     parser.add_argument("--reset-password", action="store_true", help="troca a senha do Host")
     args = parser.parse_args()
 
     if args.high_quality:
-        apply_high_quality_config()
+        apply_quality_profile("high")
         print("Qualidade alta aplicada: escala 100%, JPEG 90.")
+        return
+
+    if args.balanced:
+        apply_quality_profile("balanced")
+        print("Modo equilibrado aplicado: escala 90%, JPEG 82, 10 FPS.")
+        return
+
+    if args.low_latency:
+        apply_quality_profile("low_latency")
+        print("Baixa latencia aplicada: escala 78%, JPEG 74, 10 FPS.")
         return
 
     if args.easy_access:

@@ -550,6 +550,8 @@ class RemoteWindow:
                 payload = self.control_queue.get(timeout=0.2)
             except queue.Empty:
                 continue
+            if payload.get("type") == "move":
+                payload = self.latest_move_payload(payload)
             for attempt in range(3):
                 if self.stop_event.is_set():
                     return
@@ -564,9 +566,18 @@ class RemoteWindow:
                         self.relogin()
                     self.stop_event.wait(0.3)
 
+    def latest_move_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
+        latest = payload
+        with self.control_queue.mutex:
+            while self.control_queue.queue and self.control_queue.queue[0].get("type") == "move":
+                latest = self.control_queue.queue.popleft()
+        return latest
+
     def enqueue_control(self, payload: dict[str, Any]) -> None:
         if self.stop_event.is_set():
             return
+        if payload.get("type") == "move" and self.control_queue.qsize() > 8:
+            self.drop_stale_moves()
         try:
             self.control_queue.put_nowait(payload)
         except queue.Full:
@@ -576,6 +587,20 @@ class RemoteWindow:
                 self.control_queue.put(payload, timeout=0.1)
             except queue.Full:
                 pass
+
+    def drop_stale_moves(self) -> None:
+        with self.control_queue.mutex:
+            latest_move: dict[str, Any] | None = None
+            kept: list[dict[str, Any]] = []
+            for item in self.control_queue.queue:
+                if item.get("type") == "move":
+                    latest_move = item
+                else:
+                    kept.append(item)
+            self.control_queue.queue.clear()
+            if latest_move is not None:
+                self.control_queue.queue.append(latest_move)
+            self.control_queue.queue.extend(kept[:50])
 
     def draw_loop(self) -> None:
         try:
