@@ -532,12 +532,12 @@ CLIENT_HTML = r"""<!doctype html>
     button { height: 42px; border: 0; border-radius: 6px; background: #2f7df6; color: #fff; padding: 0 16px; font-weight: 700; cursor: pointer; }
     .row { display: flex; gap: 10px; margin-top: 14px; }
     #message { min-height: 20px; color: #ffb5b5; font-size: 13px; margin-top: 10px; }
-    #toolbar { position: fixed; left: 12px; top: 12px; display: none; gap: 8px; align-items: center; padding: 8px; background: #111827dd; border: 1px solid #374151; border-radius: 8px; color: #e5e7eb; opacity: .18; transition: opacity .2s ease; }
+    #toolbar { position: fixed; left: 12px; top: 50%; transform: translateY(-50%); z-index: 10; display: none; flex-direction: column; gap: 8px; align-items: stretch; width: 136px; padding: 8px; background: #111827dd; border: 1px solid #374151; border-radius: 8px; color: #e5e7eb; opacity: .24; transition: opacity .2s ease; }
     #toolbar:hover { opacity: 1; }
-    #toolbar button { height: 34px; background: #374151; }
+    #toolbar button { width: 100%; height: 36px; background: #374151; padding: 0 10px; }
     #toolbar button.active { background: #2563eb; }
     #toolbar button:disabled { opacity: .35; cursor: default; }
-    #toolbar span { font-size: 12px; white-space: nowrap; }
+    #toolbar span { font-size: 12px; line-height: 1.25; text-align: center; overflow-wrap: anywhere; }
   </style>
 </head>
 <body>
