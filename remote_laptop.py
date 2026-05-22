@@ -244,6 +244,7 @@ class RemoteWindow:
         self.tk_image: ImageTk.PhotoImage | None = None
         self.image_item: int | None = None
         self.overlay_item: int | None = None
+        self.control_panel: tk.Frame | None = None
         self.view_bar: tk.Frame | None = None
         self.view_buttons: dict[str, tk.Button] = {}
         self.transfer_bar: tk.Frame | None = None
@@ -267,23 +268,8 @@ class RemoteWindow:
         self.create_view_buttons()
         self.create_transfer_buttons()
 
-        self.exit_button = tk.Button(
-            self.root,
-            text="Sair",
-            command=self.close,
-            bg="#1f2937",
-            fg="#f9fafb",
-            activebackground="#374151",
-            activeforeground="#ffffff",
-            relief="flat",
-            padx=14,
-            pady=6,
-            cursor="hand2",
-        )
-        self.exit_button.place(relx=1.0, x=-14, y=14, anchor="ne")
-
         self.bind_events()
-        self.show_overlay(f"Conectado a {self.base_url}   |   clique em Sair para encerrar")
+        self.show_overlay(f"Conectado a {self.base_url}")
 
         threading.Thread(target=self.stream_worker, daemon=True).start()
         threading.Thread(target=self.control_worker, daemon=True).start()
@@ -392,8 +378,11 @@ class RemoteWindow:
         self.canvas.focus_set()
 
     def create_view_buttons(self) -> None:
-        self.view_bar = tk.Frame(self.root, bg="#111827")
-        self.view_bar.place(x=14, y=14, anchor="nw")
+        self.control_panel = tk.Frame(self.root, bg="#111827", padx=8, pady=8)
+        self.control_panel.place(x=12, rely=0.5, anchor="w")
+
+        self.view_bar = tk.Frame(self.control_panel, bg="#111827")
+        self.view_bar.pack(fill="x")
         for view in self.views:
             view_id = view["id"]
             if view_id != "all" and view_id not in ("1", "2"):
@@ -407,7 +396,7 @@ class RemoteWindow:
                 pady=6,
                 cursor="hand2",
             )
-            button.pack(side="left", padx=(0, 6))
+            button.pack(fill="x", pady=(0, 6))
             self.view_buttons[view_id] = button
         self.update_view_buttons()
 
@@ -420,8 +409,10 @@ class RemoteWindow:
                 button.configure(bg="#374151", fg="#f9fafb", activebackground="#4b5563", activeforeground="#ffffff")
 
     def create_transfer_buttons(self) -> None:
-        self.transfer_bar = tk.Frame(self.root, bg="#111827")
-        self.transfer_bar.place(x=14, y=54, anchor="nw")
+        if self.control_panel is None:
+            return
+        self.transfer_bar = tk.Frame(self.control_panel, bg="#111827")
+        self.transfer_bar.pack(fill="x", pady=(6, 0))
         tk.Button(
             self.transfer_bar,
             text="Enviar arquivo",
@@ -434,7 +425,7 @@ class RemoteWindow:
             padx=12,
             pady=6,
             cursor="hand2",
-        ).pack(side="left", padx=(0, 6))
+        ).pack(fill="x", pady=(0, 6))
         tk.Button(
             self.transfer_bar,
             text="Baixar copiados",
@@ -447,7 +438,22 @@ class RemoteWindow:
             padx=12,
             pady=6,
             cursor="hand2",
-        ).pack(side="left", padx=(0, 6))
+        ).pack(fill="x", pady=(0, 10))
+
+        self.exit_button = tk.Button(
+            self.transfer_bar,
+            text="Sair",
+            command=self.close,
+            bg="#1f2937",
+            fg="#f9fafb",
+            activebackground="#374151",
+            activeforeground="#ffffff",
+            relief="flat",
+            padx=12,
+            pady=6,
+            cursor="hand2",
+        )
+        self.exit_button.pack(fill="x")
 
     def local_clipboard_text(self) -> str:
         try:
@@ -614,11 +620,13 @@ class RemoteWindow:
 
     def show_overlay(self, text: str) -> None:
         self.hide_overlay()
+        canvas_width = max(1, self.canvas.winfo_width())
+        canvas_height = max(1, self.canvas.winfo_height())
         self.overlay_item = self.canvas.create_text(
-            18,
-            18,
+            canvas_width // 2,
+            max(18, canvas_height - 18),
             text=text,
-            anchor="nw",
+            anchor="s",
             fill="#e5e7eb",
             font=("Segoe UI", 12, "bold"),
         )
@@ -889,6 +897,8 @@ class RemoteWindow:
             self.canvas.itemconfigure(self.image_item, image=self.tk_image)
         if self.overlay_item is not None:
             self.canvas.tag_raise(self.overlay_item)
+        if self.control_panel is not None:
+            self.control_panel.lift()
         if self.view_bar is not None:
             self.view_bar.lift()
         if self.transfer_bar is not None:
