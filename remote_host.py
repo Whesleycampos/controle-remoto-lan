@@ -762,6 +762,10 @@ CLIENT_HTML = r"""<!doctype html>
       }
     });
 
+    if (new URLSearchParams(location.search).get('auto') === '1') {
+      setTimeout(() => form.requestSubmit(), 350);
+    }
+
     screen.addEventListener('pointermove', (event) => {
       const now = performance.now();
       if (now - lastMove < 16) return;

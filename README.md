@@ -37,6 +37,14 @@ Use este modo quando o laptop estiver fora da sua casa/escritorio, em outro Wi-F
 
 A busca automatica do Host funciona apenas na mesma rede Wi-Fi. Em outra rede, use manualmente o endereco Tailscale `100.x.x.x`.
 
+## Endereco facil
+
+Tambem existe um portal facil de lembrar:
+
+https://conectarwhesley.netlify.app
+
+Na primeira vez, digite ou cole o endereco Tailscale do Host, por exemplo `http://100.80.12.34:8765`. O portal salva esse endereco no navegador do laptop. Depois basta abrir `conectarwhesley.netlify.app` e clicar em `Conectar`.
+
 Nao use redirecionamento de porta, DMZ ou porta aberta no roteador. O modo recomendado para fora da rede local e Tailscale.
 
 ## Como instalar

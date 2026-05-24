@@ -11,3 +11,4 @@ host.pid
 build/
 dist/
 *.spec
+portal-netlify/.netlify/

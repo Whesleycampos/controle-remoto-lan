@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Conectar Whesley</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      font-family: "Segoe UI", Arial, sans-serif;
+      background: #f5f7fb;
+      color: #172033;
+    }
+    * { box-sizing: border-box; }
+    body {
+      min-height: 100vh;
+      margin: 0;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+      background:
+        linear-gradient(135deg, rgba(47, 125, 246, .12), transparent 42%),
+        linear-gradient(315deg, rgba(27, 137, 91, .14), transparent 48%),
+        #f5f7fb;
+    }
+    main {
+      width: min(440px, 100%);
+      border: 1px solid #d8deea;
+      border-radius: 8px;
+      background: rgba(255, 255, 255, .94);
+      box-shadow: 0 18px 58px rgba(23, 32, 51, .14);
+      padding: 22px;
+    }
+    h1 {
+      margin: 0 0 18px;
+      font-size: 24px;
+      font-weight: 750;
+      letter-spacing: 0;
+    }
+    label {
+      display: block;
+      margin: 0 0 8px;
+      color: #45536a;
+      font-size: 13px;
+      font-weight: 650;
+    }
+    input {
+      width: 100%;
+      height: 46px;
+      border: 1px solid #b9c3d3;
+      border-radius: 6px;
+      background: #ffffff;
+      color: #172033;
+      padding: 0 12px;
+      font-size: 16px;
+      outline: none;
+    }
+    input:focus {
+      border-color: #2f7df6;
+      box-shadow: 0 0 0 3px rgba(47, 125, 246, .18);
+    }
+    .buttons {
+      display: grid;
+      grid-template-columns: 1fr auto auto;
+      gap: 8px;
+      margin-top: 12px;
+    }
+    button {
+      height: 42px;
+      border: 0;
+      border-radius: 6px;
+      padding: 0 14px;
+      font-weight: 750;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    #connect {
+      background: #1b895b;
+      color: #ffffff;
+    }
+    .secondary {
+      background: #e8edf5;
+      color: #253247;
+    }
+    #status {
+      min-height: 22px;
+      margin-top: 12px;
+      color: #5f6f89;
+      font-size: 13px;
+    }
+    .hint {
+      margin: 14px 0 0;
+      color: #5f6f89;
+      font-size: 13px;
+      line-height: 1.45;
+    }
+    @media (max-width: 420px) {
+      .buttons { grid-template-columns: 1fr; }
+      button { width: 100%; }
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        background: #0d1118;
+        color: #edf2f7;
+      }
+      body {
+        background:
+          linear-gradient(135deg, rgba(47, 125, 246, .18), transparent 42%),
+          linear-gradient(315deg, rgba(27, 137, 91, .18), transparent 48%),
+          #0d1118;
+      }
+      main {
+        border-color: #293347;
+        background: rgba(17, 24, 39, .94);
+        box-shadow: 0 18px 58px rgba(0, 0, 0, .32);
+      }
+      label, #status, .hint { color: #aeb9c9; }
+      input {
+        border-color: #39465c;
+        background: #0f1522;
+        color: #edf2f7;
+      }
+      .secondary {
+        background: #253247;
+        color: #edf2f7;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Conectar Whesley</h1>
+    <form id="form">
+      <label for="host">Endereco do computador principal</label>
+      <input id="host" name="host" inputmode="url" autocomplete="url" placeholder="http://100.xx.xx.xx:8765">
+      <div class="buttons">
+        <button id="connect" type="submit">Conectar</button>
+        <button class="secondary" id="save" type="button">Salvar</button>
+        <button class="secondary" id="clear" type="button">Limpar</button>
+      </div>
+      <div id="status"></div>
+    </form>
+    <p class="hint">Use o endereco Tailscale do Host. Depois de salvar, este portal lembra neste navegador.</p>
+  </main>
+
+  <script>
+    const storageKey = 'controleRemotoLanHostUrl';
+    const form = document.getElementById('form');
+    const hostInput = document.getElementById('host');
+    const statusEl = document.getElementById('status');
+    const saved = localStorage.getItem(storageKey) || '';
+
+    if (saved) {
+      hostInput.value = saved;
+      statusEl.textContent = 'Endereco salvo neste navegador.';
+    }
+
+    function normalizeHost(value) {
+      let text = value.trim();
+      if (!text) return '';
+      if (!/^https?:\/\//i.test(text)) text = `http://${text}`;
+      const url = new URL(text);
+      if (!url.port) url.port = '8765';
+      url.searchParams.set('auto', '1');
+      return url.toString();
+    }
+
+    function saveHost() {
+      try {
+        const normalized = normalizeHost(hostInput.value);
+        localStorage.setItem(storageKey, normalized);
+        hostInput.value = normalized;
+        statusEl.textContent = 'Endereco salvo.';
+        return normalized;
+      } catch (_error) {
+        statusEl.textContent = 'Endereco invalido.';
+        return '';
+      }
+    }
+
+    form.addEventListener('submit', (event) => {
+      event.preventDefault();
+      const target = saveHost();
+      if (target) window.location.href = target;
+    });
+
+    document.getElementById('save').addEventListener('click', saveHost);
+    document.getElementById('clear').addEventListener('click', () => {
+      localStorage.removeItem(storageKey);
+      hostInput.value = '';
+      statusEl.textContent = 'Endereco removido.';
+      hostInput.focus();
+    });
+  </script>
+</body>
+</html>
