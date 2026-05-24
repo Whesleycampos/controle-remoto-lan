@@ -10,6 +10,7 @@ import io
 import ipaddress
 import json
 import secrets
+import shutil
 import socket
 import subprocess
 import sys
@@ -31,6 +32,7 @@ TRANSFER_DIR = Path.home() / "Downloads" / "ControleRemotoLAN"
 EASY_PASSWORD = "controle"
 DISCOVERY_PORT = 8766
 CONTROL_PORT = 8767
+TAILSCALE_NETWORK = ipaddress.ip_network("100.64.0.0/10")
 
 QUALITY_PROFILES: dict[str, dict[str, float | int]] = {
     "balanced": {"fps": 10, "jpeg_quality": 82, "scale": 0.9},
@@ -265,7 +267,42 @@ def is_private_client(ip_text: str) -> bool:
         ip = ipaddress.ip_address(ip_text)
     except ValueError:
         return False
-    return ip.is_private or ip.is_loopback or ip.is_link_local
+    if ip.is_private or ip.is_loopback or ip.is_link_local:
+        return True
+    return ip.version == TAILSCALE_NETWORK.version and ip in TAILSCALE_NETWORK
+
+
+def tailscale_ip_addresses() -> list[str]:
+    commands = []
+    detected = shutil.which("tailscale")
+    if detected:
+        commands.append(detected)
+    default_path = Path(r"C:\Program Files\Tailscale\tailscale.exe")
+    if default_path.exists():
+        commands.append(str(default_path))
+
+    ips: set[str] = set()
+    for command in dict.fromkeys(commands):
+        try:
+            result = subprocess.run(
+                [command, "ip", "-4"],
+                capture_output=True,
+                text=True,
+                timeout=4,
+            )
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if result.returncode != 0:
+            continue
+        for line in result.stdout.splitlines():
+            candidate = line.strip()
+            try:
+                ip = ipaddress.ip_address(candidate)
+            except ValueError:
+                continue
+            if ip.version == TAILSCALE_NETWORK.version and ip in TAILSCALE_NETWORK:
+                ips.add(candidate)
+    return sorted(ips)
 
 
 def local_ip_addresses() -> list[str]:
@@ -1283,12 +1320,19 @@ def serve() -> None:
     server = ThreadingHTTPServer((bind_host, port), RemoteRequestHandler)
     urls = [f"http://{ip}:{port}" for ip in local_ip_addresses()]
     safe_urls = "\n".join(f"  {html.escape(url)}" for url in urls) or "  Nao consegui detectar o IP local."
+    tailscale_urls = [f"http://{ip}:{port}" for ip in tailscale_ip_addresses()]
+    safe_tailscale_urls = "\n".join(f"  {html.escape(url)}" for url in tailscale_urls)
 
     print("Controle Remoto LAN - Host")
     print("===========================")
     print(f"Computador: {socket.gethostname()}")
-    print("Enderecos para usar no laptop:")
+    print("Enderecos para usar no laptop na mesma rede Wi-Fi:")
     print(safe_urls)
+    if safe_tailscale_urls:
+        print("Enderecos para usar no laptop em outra rede Wi-Fi via Tailscale:")
+        print(safe_tailscale_urls)
+    else:
+        print("Para outra rede Wi-Fi: instale e conecte o Tailscale nos dois computadores.")
     print(f"Senha padrao: {EASY_PASSWORD}")
     print(f"Canal rapido de mouse/teclado: porta {int(config.get('control_port', CONTROL_PORT))}")
     print("O laptop tenta encontrar este Host automaticamente na rede.")

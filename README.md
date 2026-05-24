@@ -4,6 +4,8 @@ Programa simples para controlar um computador Windows a partir de um laptop Wind
 
 Ele foi feito para uso local e autorizado. Por padrao usa a senha facil `controle`, que ja vem preenchida no laptop. Nao exponha este programa na internet.
 
+Para controlar por outra rede Wi-Fi, use Tailscale nos dois computadores. Assim os dois ficam em uma rede privada virtual e nao precisa abrir porta no roteador.
+
 ## Forma mais facil pelo GitHub
 
 No computador principal, abra o PowerShell e rode:
@@ -19,6 +21,21 @@ irm https://raw.githubusercontent.com/Whesleycampos/controle-remoto-lan/main/bai
 ```
 
 Depois disso, o Host fica aberto no computador principal e o laptop tenta encontra-lo automaticamente na rede. Se a busca automatica nao funcionar por causa do firewall/rede, digite no laptop o IP mostrado na janela do Host.
+
+## Controlar por outra rede Wi-Fi
+
+Use este modo quando o laptop estiver fora da sua casa/escritorio, em outro Wi-Fi ou no roteador do celular.
+
+1. No computador principal e no laptop, execute `instalar_tailscale_outra_rede.bat`.
+2. Abra o Tailscale nos dois computadores e faca login na mesma conta.
+3. No computador principal, execute `liberar_firewall_tailscale_admin.bat` como Administrador.
+4. No computador principal, deixe o Host aberto.
+5. No computador principal, execute `mostrar_ip_tailscale_host.bat` e copie o endereco mostrado, por exemplo `http://100.80.12.34:8765`.
+6. No laptop, usando qualquer outra rede Wi-Fi, abra esse endereco no navegador ou digite o IP `100.x.x.x` no app do laptop.
+
+A busca automatica do Host funciona apenas na mesma rede Wi-Fi. Em outra rede, use manualmente o endereco Tailscale `100.x.x.x`.
+
+Nao use redirecionamento de porta, DMZ ou porta aberta no roteador. O modo recomendado para fora da rede local e Tailscale.
 
 ## Como instalar
 
