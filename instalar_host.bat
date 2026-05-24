@@ -35,8 +35,11 @@ if errorlevel 1 (
 set "SHORTCUT_TARGET=%~dp0iniciar_host.bat"
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$desktop=[Environment]::GetFolderPath('Desktop'); $w=New-Object -ComObject WScript.Shell; $s=$w.CreateShortcut((Join-Path $desktop 'Controle Remoto LAN - Host.lnk')); $s.TargetPath=$env:SHORTCUT_TARGET; $s.WorkingDirectory=(Split-Path $env:SHORTCUT_TARGET); $s.IconLocation='shell32.dll,18'; $s.Save()"
 
+call ativar_acesso_remoto_sempre.bat /quiet
+
 echo.
 echo Instalacao do Host concluida.
-echo Use o atalho "Controle Remoto LAN - Host" na Area de Trabalho.
+echo O Host foi configurado para iniciar sozinho com o Windows.
+echo Use o atalho "Controle Remoto LAN - Host" na Area de Trabalho se quiser abrir manualmente.
 echo Se o Windows Firewall perguntar, permita acesso em redes privadas.
 pause

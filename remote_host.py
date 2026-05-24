@@ -591,7 +591,7 @@ CLIENT_HTML = r"""<!doctype html>
     <form id="loginForm">
       <h1>Controle Remoto LAN</h1>
       <label for="password">Senha do Host</label>
-      <input id="password" type="password" autocomplete="current-password" autofocus />
+      <input id="password" type="password" autocomplete="current-password" value="controle" autofocus />
       <div class="row"><button type="submit">Conectar</button></div>
       <div id="message"></div>
     </form>
@@ -609,12 +609,17 @@ CLIENT_HTML = r"""<!doctype html>
     let views = [];
     let activeView = '1';
     let lastMove = 0;
+    let streamReconnectTimer = null;
+    let manualDisconnect = false;
     const pressed = new Set();
 
     function api(path, options = {}) {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 8000);
       options.headers = Object.assign({ 'Content-Type': 'application/json' }, options.headers || {});
       if (token) options.headers['X-Remote-Token'] = token;
-      return fetch(path, options);
+      if (!options.signal) options.signal = controller.signal;
+      return fetch(path, options).finally(() => clearTimeout(timeout));
     }
 
     function displayBox() {
@@ -666,11 +671,60 @@ CLIENT_HTML = r"""<!doctype html>
       });
     }
 
-    function applyStatus(status) {
+    function streamUrl() {
+      return `/stream?token=${encodeURIComponent(token)}&view=${encodeURIComponent(activeView)}&t=${Date.now()}`;
+    }
+
+    function startStream() {
+      if (!token || manualDisconnect) return;
+      screen.src = streamUrl();
+      screen.focus();
+    }
+
+    async function loginWithSavedPassword() {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 8000);
+      try {
+        return await fetch('/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ password: password.value || 'controle' }),
+          signal: controller.signal
+        });
+      } finally {
+        clearTimeout(timeout);
+      }
+    }
+
+    function scheduleStreamReconnect() {
+      if (!token || manualDisconnect || streamReconnectTimer) return;
+      statusEl.textContent = 'Reconectando automaticamente...';
+      streamReconnectTimer = setTimeout(async () => {
+        streamReconnectTimer = null;
+        if (!token || manualDisconnect) return;
+        const preferredView = activeView;
+        try {
+          const response = await loginWithSavedPassword();
+          if (response.ok) {
+            const data = await response.json();
+            token = data.token;
+            applyStatus(data.status, preferredView);
+          }
+        } catch (_error) {
+          scheduleStreamReconnect();
+          return;
+        }
+        startStream();
+      }, 2500);
+    }
+
+    function applyStatus(status, preferredView = null) {
       views = Array.isArray(status.views) && status.views.length
         ? status.views
         : [{ id: status.active_view || '1', label: 'Tela 1', width: status.width, height: status.height }];
-      activeView = status.active_view || (viewById('all') ? 'all' : views[0].id);
+      activeView = preferredView && viewById(preferredView)
+        ? preferredView
+        : status.active_view || (viewById('all') ? 'all' : views[0].id);
       const view = viewById(activeView) || views[0];
       activeView = view.id;
       remote = { width: view.width, height: view.height };
@@ -685,24 +739,20 @@ CLIENT_HTML = r"""<!doctype html>
       remote = { width: view.width, height: view.height };
       statusEl.textContent = `${view.label || activeView} - ${remote.width} x ${remote.height}`;
       updateViewButtons();
-      screen.src = `/stream?token=${encodeURIComponent(token)}&view=${encodeURIComponent(activeView)}&t=${Date.now()}`;
-      screen.focus();
+      startStream();
     }
 
     form.addEventListener('submit', async (event) => {
       event.preventDefault();
       message.textContent = '';
       try {
-        const response = await fetch('/login', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ password: password.value })
-        });
+        const response = await loginWithSavedPassword();
         if (!response.ok) throw new Error('Senha incorreta ou Host indisponivel.');
         const data = await response.json();
         token = data.token;
+        manualDisconnect = false;
         applyStatus(data.status);
-        screen.src = `/stream?token=${encodeURIComponent(token)}&view=${encodeURIComponent(activeView)}&t=${Date.now()}`;
+        startStream();
         login.style.display = 'none';
         toolbar.style.display = 'flex';
         screen.focus();
@@ -762,10 +812,32 @@ CLIENT_HTML = r"""<!doctype html>
       pressed.clear();
     });
 
+    screen.addEventListener('error', scheduleStreamReconnect);
+    window.addEventListener('online', scheduleStreamReconnect);
+    setInterval(async () => {
+      if (!token || manualDisconnect) return;
+      try {
+        const response = await api(`/status?view=${encodeURIComponent(activeView)}`, { method: 'GET' });
+        if (response.status === 401 || response.status === 403) {
+          scheduleStreamReconnect();
+          return;
+        }
+        if (response.ok) {
+          applyStatus(await response.json(), activeView);
+        }
+      } catch (_error) {
+        scheduleStreamReconnect();
+      }
+    }, 5000);
+
     document.addEventListener('contextmenu', (event) => event.preventDefault());
     document.querySelectorAll('.view-btn').forEach((button) => button.addEventListener('click', () => setView(button.dataset.view)));
     document.getElementById('fullscreen').addEventListener('click', () => document.documentElement.requestFullscreen?.());
-    document.getElementById('disconnect').addEventListener('click', () => location.reload());
+    document.getElementById('disconnect').addEventListener('click', () => {
+      manualDisconnect = true;
+      token = null;
+      location.reload();
+    });
   </script>
 </body>
 </html>

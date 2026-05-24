@@ -22,5 +22,4 @@ Move-Item -LiteralPath $source -Destination $target
 Write-Host "Instalando o Host..."
 Start-Process -FilePath (Join-Path $target "instalar_host.bat") -WorkingDirectory $target -Wait
 
-Write-Host "Abrindo o Host..."
-Start-Process -FilePath (Join-Path $target "iniciar_host.bat") -WorkingDirectory $target
+Write-Host "Host instalado e configurado para ficar sempre ligado."

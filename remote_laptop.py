@@ -701,7 +701,7 @@ class RemoteWindow:
                     if response.status_code in (401, 403):
                         if not self.relogin():
                             self.stop_event.wait(retry_seconds)
-                            retry_seconds = min(30.0, retry_seconds * 1.5)
+                            retry_seconds = min(10.0, retry_seconds * 1.5)
                         continue
                     response.raise_for_status()
                     retry_seconds = 1.0
@@ -745,7 +745,7 @@ class RemoteWindow:
 
             if not self.stop_event.is_set():
                 self.stop_event.wait(retry_seconds)
-                retry_seconds = min(30.0, retry_seconds * 1.5)
+                retry_seconds = min(10.0, retry_seconds * 1.5)
 
     def put_latest_frame(self, image: Image.Image) -> None:
         try:

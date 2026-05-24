@@ -22,6 +22,8 @@ irm https://raw.githubusercontent.com/Whesleycampos/controle-remoto-lan/main/bai
 
 Depois disso, o Host fica aberto no computador principal e o laptop tenta encontra-lo automaticamente na rede. Se a busca automatica nao funcionar por causa do firewall/rede, digite no laptop o IP mostrado na janela do Host.
 
+Na instalacao do Host, o modo sempre ligado e ativado automaticamente. Quando o usuario entrar no Windows, o Host sobe em segundo plano, usa a senha `controle` e nao pede confirmacao no computador principal.
+
 ## Controlar por outra rede Wi-Fi
 
 Use este modo quando o laptop estiver fora da sua casa/escritorio, em outro Wi-Fi ou no roteador do celular.
@@ -44,10 +46,12 @@ Nao use redirecionamento de porta, DMZ ou porta aberta no roteador. O modo recom
 1. Abra a pasta `controle-remoto-lan`.
 2. Execute `instalar_host.bat`.
 3. Quando terminar, use o atalho `Controle Remoto LAN - Host` na Area de Trabalho.
-4. Deixe a janela aberta. Ela mostra o IP que deve ser usado no laptop, por exemplo `http://192.168.1.50:8765`.
+4. O modo sempre ligado ja fica ativado. O Host tambem pode ser aberto manualmente pelo atalho; a janela mostra o IP que deve ser usado no laptop, por exemplo `http://192.168.1.50:8765`.
 5. Se o Windows Firewall perguntar, permita acesso em redes privadas.
 
 A senha padrao e `controle`, e o laptop ja vem com ela preenchida. Para trocar a senha, execute `resetar_senha_host.bat`.
+
+Para garantir acesso a qualquer momento enquanto o computador estiver ligado e com o usuario no Windows, execute `ativar_acesso_remoto_sempre.bat`. Ele registra o Host no Agendador do Windows e reinicia o Host automaticamente se o processo cair. Para remover esse modo e fechar o Host, execute `desativar_acesso_remoto_sempre.bat`.
 
 ### No laptop
 
@@ -67,6 +71,8 @@ Se o computador Host tiver dois monitores, o laptop mostra tres botoes no canto 
 - `Tela 2`: foca apenas no monitor 2.
 
 O Controle do laptop tenta reconectar automaticamente se o Wi-Fi oscilar, se o streaming cair ou se a sessao precisar ser renovada. Ele mantem a janela aberta e so fecha quando voce encerra pelo laptop.
+
+Se estiver usando pelo navegador, a pagina tambem tenta relogar com a senha `controle` e reabrir o stream quando a rede volta.
 
 ## Copiar, colar e arquivos
 
@@ -109,6 +115,7 @@ Tambem e possivel controlar pelo navegador do laptop:
 
 - `Ctrl+Alt+Del`, tela bloqueada do Windows e algumas telas de permissao/UAC nao podem ser controladas por seguranca do Windows.
 - A qualidade depende da velocidade do Wi-Fi.
+- O computador principal precisa estar ligado, conectado a internet/rede e com o Windows em uma sessao de usuario que permita capturar a tela.
 - Nao exponha a porta `8765` na internet, roteador, DMZ ou redirecionamento de portas.
 - Para parar o acesso pelo laptop, clique em `Sair`.
 - Para parar o Host, feche a janela do Host ou pressione `Ctrl+C` nela.
