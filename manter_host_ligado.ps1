@@ -31,7 +31,7 @@ while ($true) {
 
   try {
     $process = Start-Process -FilePath $python `
-      -ArgumentList @("-u", "remote_host.py") `
+      -ArgumentList "-u `"$hostScript`"" `
       -WorkingDirectory $scriptDir `
       -WindowStyle Hidden `
       -RedirectStandardOutput $outLog `

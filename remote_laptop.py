@@ -5,9 +5,11 @@ import io
 import json
 import queue
 import socket
+import subprocess
 import threading
 import time
 import urllib.parse
+import zipfile
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +30,7 @@ except ImportError as exc:
 APP_DIR = Path(__file__).resolve().parent
 CONFIG_PATH = APP_DIR / "laptop_config.json"
 TRANSFER_DIR = Path.home() / "Downloads" / "ControleRemotoLAN"
+INVALID_FILENAME_CHARS = '<>:"/\\|?*'
 DEFAULT_PORT = 8765
 DEFAULT_PASSWORD = "controle"
 DISCOVERY_PORT = 8766
@@ -64,6 +67,24 @@ def normalize_host_and_port(host_text: str, port_text: str) -> tuple[str, int]:
             port = int(port_part)
 
     return host_text.strip("/"), port
+
+
+def safe_local_name(name: str) -> str:
+    cleaned = "".join("_" if char in INVALID_FILENAME_CHARS or ord(char) < 32 else char for char in name)
+    return cleaned.strip(" .") or "arquivos-copiados"
+
+
+def unique_directory(parent: Path, name: str) -> Path:
+    base = parent / safe_local_name(name)
+    if not base.exists():
+        return base
+    timestamp = time.strftime("%Y%m%d-%H%M%S")
+    candidate = parent / f"{base.name}-{timestamp}"
+    suffix = 2
+    while candidate.exists():
+        candidate = parent / f"{base.name}-{timestamp}-{suffix}"
+        suffix += 1
+    return candidate
 
 
 class LoginApp:
@@ -428,7 +449,7 @@ class RemoteWindow:
         ).pack(fill="x", pady=(0, 6))
         tk.Button(
             self.transfer_bar,
-            text="Baixar copiados",
+            text="Colar no laptop",
             command=self.download_copied_files,
             bg="#374151",
             fg="#f9fafb",
@@ -578,7 +599,9 @@ class RemoteWindow:
         threading.Thread(target=self.download_copied_files_worker, daemon=True).start()
 
     def download_copied_files_worker(self) -> None:
-        self.schedule_ui(lambda: self.show_overlay("Baixando arquivos copiados no Host..."))
+        self.schedule_ui(lambda: self.show_overlay("Copiando arquivos do Host para o laptop..."))
+        zip_path: Path | None = None
+        extracted_paths: list[Path] = []
         try:
             response = self.session.get(
                 f"{self.base_url}/files/download-copied",
@@ -597,18 +620,82 @@ class RemoteWindow:
             response.raise_for_status()
             TRANSFER_DIR.mkdir(parents=True, exist_ok=True)
             name = self.filename_from_response(response) or f"arquivos-copiados-{time.strftime('%Y%m%d-%H%M%S')}.zip"
-            path = TRANSFER_DIR / name
-            with path.open("wb") as file:
+            zip_path = TRANSFER_DIR / name
+            with zip_path.open("wb") as file:
                 for chunk in response.iter_content(chunk_size=1024 * 1024):
                     if chunk:
                         file.write(chunk)
+            extracted_paths = self.extract_downloaded_zip(zip_path)
         except Exception as exc:
-            self.schedule_ui(lambda exc=exc: self.show_overlay(f"Nao consegui baixar copiados: {exc}"))
+            self.schedule_ui(lambda exc=exc: self.show_overlay(f"Nao consegui copiar arquivos: {exc}"))
             self.schedule_ui_later(4000, self.hide_overlay)
             return
-        self.set_local_clipboard_text(str(path))
-        self.schedule_ui(lambda: self.show_overlay(f"Baixado no laptop: {path.name}"))
+
+        if extracted_paths and self.set_local_file_clipboard(extracted_paths):
+            self.schedule_ui(lambda: self.show_overlay("Pronto: abra uma pasta no laptop e aperte Ctrl+V"))
+        elif zip_path is not None:
+            self.set_local_clipboard_text(str(zip_path))
+            self.schedule_ui(lambda: self.show_overlay(f"Baixado no laptop: {zip_path.name}"))
+        else:
+            self.schedule_ui(lambda: self.show_overlay("Arquivos baixados no laptop"))
         self.schedule_ui_later(4000, self.hide_overlay)
+
+    def extract_downloaded_zip(self, zip_path: Path) -> list[Path]:
+        extract_dir = unique_directory(TRANSFER_DIR, zip_path.stem)
+        extract_dir.mkdir(parents=True, exist_ok=True)
+        target_root = extract_dir.resolve()
+        with zipfile.ZipFile(zip_path, "r") as archive:
+            for member in archive.infolist():
+                member_name = member.filename.replace("\\", "/")
+                parts = [part for part in member_name.split("/") if part and part != "."]
+                if not parts or any(part == ".." for part in parts):
+                    continue
+                target = target_root.joinpath(*parts)
+                try:
+                    target.resolve().relative_to(target_root)
+                except ValueError:
+                    continue
+                if member.is_dir():
+                    target.mkdir(parents=True, exist_ok=True)
+                    continue
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with archive.open(member, "r") as source, target.open("wb") as destination:
+                    while True:
+                        chunk = source.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        destination.write(chunk)
+        return sorted(extract_dir.iterdir(), key=lambda path: path.name.lower())
+
+    def set_local_file_clipboard(self, paths: list[Path]) -> bool:
+        existing = [str(path.resolve()) for path in paths if path.exists()]
+        if not existing:
+            return False
+        encoded_paths = base64.b64encode(json.dumps(existing).encode("utf-8")).decode("ascii")
+        script = r"""
+Add-Type -AssemblyName System.Windows.Forms
+$json = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($args[0]))
+$paths = @($json | ConvertFrom-Json)
+$collection = New-Object System.Collections.Specialized.StringCollection
+foreach ($path in $paths) {
+  if (Test-Path -LiteralPath $path) {
+    [void]$collection.Add([string]$path)
+  }
+}
+if ($collection.Count -gt 0) {
+  [System.Windows.Forms.Clipboard]::SetFileDropList($collection)
+}
+"""
+        try:
+            result = subprocess.run(
+                ["powershell", "-STA", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script, encoded_paths],
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return False
+        return result.returncode == 0
 
     def filename_from_response(self, response: requests.Response) -> str | None:
         disposition = response.headers.get("Content-Disposition", "")

@@ -89,7 +89,9 @@ Enquanto estiver conectado, texto copiado no computador Host e sincronizado auto
 No canto superior esquerdo do laptop tambem existem botoes de arquivo:
 
 - `Enviar arquivo`: escolhe arquivo(s) do laptop e envia para `Downloads\ControleRemotoLAN` no computador Host.
-- `Baixar copiados`: primeiro copie arquivo(s) no computador Host; depois clique nesse botao no laptop para baixar um `.zip` em `Downloads\ControleRemotoLAN`.
+- `Colar no laptop`: primeiro copie arquivo(s) no computador Host; depois clique nesse botao no laptop. O app baixa os arquivos, extrai em `Downloads\ControleRemotoLAN` e coloca os arquivos no clipboard do laptop. Depois abra uma pasta no laptop e pressione `Ctrl+V`.
+
+Pelo navegador, existe o botao `Baixar copiados`. Por seguranca do navegador, ele baixa um `.zip` em vez de colocar os arquivos direto no clipboard do Windows.
 
 ## Se nao conectar
 

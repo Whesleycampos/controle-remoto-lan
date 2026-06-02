@@ -583,6 +583,7 @@ CLIENT_HTML = r"""<!doctype html>
     <button class="view-btn" data-view="all" type="button">Duas telas</button>
     <button class="view-btn" data-view="1" type="button">Tela 1</button>
     <button class="view-btn" data-view="2" type="button">Tela 2</button>
+    <button id="downloadCopied" type="button">Baixar copiados</button>
     <button id="fullscreen" type="button">Tela cheia</button>
     <button id="disconnect" type="button">Sair</button>
     <span id="status"></span>
@@ -718,6 +719,54 @@ CLIENT_HTML = r"""<!doctype html>
       }, 2500);
     }
 
+    function filenameFromDisposition(disposition) {
+      if (!disposition) return '';
+      const match = disposition.match(/filename="?([^"]+)"?/i);
+      return match ? match[1] : '';
+    }
+
+    async function reloginForDownload() {
+      const response = await loginWithSavedPassword();
+      if (!response.ok) return false;
+      const data = await response.json();
+      token = data.token;
+      applyStatus(data.status, activeView);
+      return true;
+    }
+
+    async function downloadCopiedFiles() {
+      if (!token || manualDisconnect) return;
+      statusEl.textContent = 'Baixando arquivos copiados...';
+      let response = await fetch('/files/download-copied', { headers: { 'X-Remote-Token': token } });
+      if (response.status === 401 || response.status === 403) {
+        if (!(await reloginForDownload())) {
+          statusEl.textContent = 'Sessao expirada.';
+          return;
+        }
+        response = await fetch('/files/download-copied', { headers: { 'X-Remote-Token': token } });
+      }
+      if (!response.ok) {
+        let errorText = 'Nao consegui baixar os arquivos copiados.';
+        try {
+          const error = await response.json();
+          if (error.error) errorText = error.error;
+        } catch (_error) {}
+        statusEl.textContent = errorText;
+        return;
+      }
+      const blob = await response.blob();
+      const name = filenameFromDisposition(response.headers.get('Content-Disposition')) || `arquivos-copiados-${Date.now()}.zip`;
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = name;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      statusEl.textContent = 'Baixado no laptop.';
+    }
+
     function applyStatus(status, preferredView = null) {
       views = Array.isArray(status.views) && status.views.length
         ? status.views
@@ -836,6 +885,7 @@ CLIENT_HTML = r"""<!doctype html>
 
     document.addEventListener('contextmenu', (event) => event.preventDefault());
     document.querySelectorAll('.view-btn').forEach((button) => button.addEventListener('click', () => setView(button.dataset.view)));
+    document.getElementById('downloadCopied').addEventListener('click', downloadCopiedFiles);
     document.getElementById('fullscreen').addEventListener('click', () => document.documentElement.requestFullscreen?.());
     document.getElementById('disconnect').addEventListener('click', () => {
       manualDisconnect = true;
