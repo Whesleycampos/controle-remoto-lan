@@ -278,13 +278,14 @@ class RemoteWindow:
         self.mouse_buttons_pressed: set[str] = set()
         self.last_remote_point = (0, 0)
         self.pressed_keys: set[str] = set()
+        self.text_key_releases: set[str] = set()
 
         self.root.title("Controle Remoto LAN - conectado")
         self.root.configure(background="black")
         self.root.attributes("-fullscreen", True)
         self.root.focus_force()
 
-        self.canvas = tk.Canvas(self.root, background="black", highlightthickness=0, cursor="crosshair")
+        self.canvas = tk.Canvas(self.root, background="black", highlightthickness=0, cursor="arrow")
         self.canvas.pack(fill="both", expand=True)
         self.canvas.focus_set()
 
@@ -927,7 +928,7 @@ if ($collection.Count -gt 0) {
         return latest
 
     def is_coalescible_move(self, payload: dict[str, Any]) -> bool:
-        return payload.get("type") == "move" and not payload.get("drag")
+        return payload.get("type") == "move"
 
     def enqueue_control(self, payload: dict[str, Any]) -> None:
         if self.stop_event.is_set():
@@ -1016,7 +1017,7 @@ if ($collection.Count -gt 0) {
     def on_motion(self, event: tk.Event) -> str:
         now = time.monotonic()
         dragging = bool(self.mouse_buttons_pressed)
-        min_interval = 0.008 if dragging else 0.016
+        min_interval = 0.006 if dragging else 0.008
         if now - self.last_move_sent < min_interval:
             return "break"
         self.last_move_sent = now
@@ -1071,7 +1072,22 @@ if ($collection.Count -gt 0) {
             )
         return "break"
 
+    def key_event_id(self, event: tk.Event) -> str:
+        return f"{event.keysym}:{getattr(event, 'keycode', '')}"
+
+    def printable_text_from_event(self, event: tk.Event) -> str:
+        text = event.char or ""
+        if len(text) == 1 and ord(text) >= 32 and ord(text) != 127:
+            return text
+        return ""
+
     def on_key_down(self, event: tk.Event) -> str:
+        text = self.printable_text_from_event(event)
+        if text:
+            self.text_key_releases.add(self.key_event_id(event))
+            self.enqueue_control({"type": "text", "text": text, "release_modifiers": True})
+            return "break"
+
         key_id = event.keysym
         if key_id not in self.pressed_keys:
             self.pressed_keys.add(key_id)
@@ -1086,6 +1102,11 @@ if ($collection.Count -gt 0) {
         return "break"
 
     def on_key_up(self, event: tk.Event) -> str:
+        text_key_id = self.key_event_id(event)
+        if text_key_id in self.text_key_releases:
+            self.text_key_releases.remove(text_key_id)
+            return "break"
+
         key_id = event.keysym
         if key_id in self.pressed_keys:
             self.pressed_keys.remove(key_id)
@@ -1103,6 +1124,7 @@ if ($collection.Count -gt 0) {
         for key in list(self.pressed_keys):
             self.enqueue_control({"type": "key", "action": "up", "keysym": key, "key": key})
         self.pressed_keys.clear()
+        self.text_key_releases.clear()
         self.release_remote_mouse_buttons()
 
     def release_remote_mouse_buttons(self) -> None:

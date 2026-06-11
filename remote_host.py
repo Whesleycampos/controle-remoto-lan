@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import ctypes
 import getpass
 import hashlib
 import hmac
@@ -23,6 +24,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
+from ctypes import wintypes
 
 
 APP_DIR = Path(__file__).resolve().parent
@@ -33,6 +35,7 @@ EASY_PASSWORD = "controle"
 DISCOVERY_PORT = 8766
 CONTROL_PORT = 8767
 TAILSCALE_NETWORK = ipaddress.ip_network("100.64.0.0/10")
+SCROLL_MULTIPLIER = 2
 
 QUALITY_PROFILES: dict[str, dict[str, float | int]] = {
     "balanced": {"fps": 10, "jpeg_quality": 82, "scale": 0.9},
@@ -209,6 +212,60 @@ def clipboard_text() -> str:
 def set_clipboard_text(text: str) -> None:
     assert pyperclip_module is not None
     pyperclip_module.copy(text)
+
+
+def release_remote_modifiers() -> None:
+    assert pyautogui_module is not None
+    for key in ("ctrl", "alt", "shift"):
+        try:
+            pyautogui_module.keyUp(key)
+        except Exception:
+            pass
+
+
+def type_unicode_text(text: str) -> None:
+    assert pyautogui_module is not None
+    if not text:
+        return
+    if sys.platform != "win32":
+        pyautogui_module.write(text, interval=0)
+        return
+
+    input_keyboard = 1
+    keyeventf_keyup = 0x0002
+    keyeventf_unicode = 0x0004
+
+    class KeybdInput(ctypes.Structure):
+        _fields_ = [
+            ("wVk", wintypes.WORD),
+            ("wScan", wintypes.WORD),
+            ("dwFlags", wintypes.DWORD),
+            ("time", wintypes.DWORD),
+            ("dwExtraInfo", ctypes.c_size_t),
+        ]
+
+    class InputUnion(ctypes.Union):
+        _fields_ = [("ki", KeybdInput)]
+
+    class Input(ctypes.Structure):
+        _fields_ = [("type", wintypes.DWORD), ("union", InputUnion)]
+
+    code_units = [
+        int.from_bytes(text_utf16[i : i + 2], "little")
+        for text_utf16 in [text.encode("utf-16-le")]
+        for i in range(0, len(text_utf16), 2)
+    ]
+    events = (Input * (len(code_units) * 2))()
+    for index, code_unit in enumerate(code_units):
+        down = index * 2
+        up = down + 1
+        events[down].type = input_keyboard
+        events[down].union.ki = KeybdInput(0, code_unit, keyeventf_unicode, 0, 0)
+        events[up].type = input_keyboard
+        events[up].union.ki = KeybdInput(0, code_unit, keyeventf_unicode | keyeventf_keyup, 0, 0)
+    sent = ctypes.windll.user32.SendInput(len(events), events, ctypes.sizeof(Input))
+    if sent != len(events):
+        raise OSError("falha ao enviar texto Unicode")
 
 
 def clipboard_file_paths() -> list[Path]:
@@ -525,6 +582,9 @@ def normalize_key(payload: dict[str, Any]) -> str | None:
         if code in SPECIAL_CODE_MAP:
             return SPECIAL_CODE_MAP[code]
         if code in PUNCTUATION_CODE_MAP:
+            # Prefer actual typed character so layout-specific keys work correctly.
+            if len(key) == 1:
+                return key
             return PUNCTUATION_CODE_MAP[code]
         if code.startswith("Key") and len(code) == 4:
             return code[-1].lower()
@@ -562,7 +622,7 @@ CLIENT_HTML = r"""<!doctype html>
     :root { color-scheme: dark; font-family: Arial, sans-serif; }
     * { box-sizing: border-box; }
     html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #050505; }
-    #screen { width: 100vw; height: 100vh; object-fit: contain; display: block; user-select: none; -webkit-user-drag: none; cursor: crosshair; }
+    #screen { width: 100vw; height: 100vh; object-fit: contain; display: block; user-select: none; -webkit-user-drag: none; cursor: default; }
     #login { position: fixed; inset: 0; display: grid; place-items: center; background: #101114; color: #f5f5f5; }
     #login form { width: min(420px, calc(100vw - 32px)); background: #1b1d23; border: 1px solid #323743; padding: 22px; border-radius: 8px; box-shadow: 0 20px 80px #0008; }
     h1 { margin: 0 0 14px; font-size: 22px; }
@@ -618,6 +678,9 @@ CLIENT_HTML = r"""<!doctype html>
     let streamReconnectTimer = null;
     let manualDisconnect = false;
     const pressed = new Set();
+    const controlQueue = [];
+    let controlInFlight = false;
+    const maxControlQueue = 80;
 
     function api(path, options = {}) {
       const controller = new AbortController();
@@ -664,10 +727,57 @@ CLIENT_HTML = r"""<!doctype html>
       return lastRemotePoint;
     }
 
+    function compactControlQueue() {
+      const compacted = [];
+      for (const item of controlQueue) {
+        const last = compacted[compacted.length - 1];
+        if (item.type === 'move' && last?.type === 'move' && item.view === last.view) {
+          compacted[compacted.length - 1] = item;
+        } else {
+          compacted.push(item);
+        }
+      }
+      while (compacted.length > maxControlQueue) {
+        const staleMoveIndex = compacted.findIndex((item, index) => item.type === 'move' && index < compacted.length - 1);
+        if (staleMoveIndex < 0) break;
+        compacted.splice(staleMoveIndex, 1);
+      }
+      controlQueue.length = 0;
+      controlQueue.push(...compacted.slice(-maxControlQueue));
+    }
+
+    async function drainControlQueue() {
+      if (controlInFlight || !token) return;
+      const payload = controlQueue.shift();
+      if (!payload) return;
+      controlInFlight = true;
+      try {
+        await api('/control', { method: 'POST', body: JSON.stringify(payload) });
+      } catch (_error) {
+      } finally {
+        controlInFlight = false;
+        if (controlQueue.length) setTimeout(drainControlQueue, 0);
+      }
+    }
+
     function sendControl(payload) {
       if (!token) return;
       payload.view = activeView;
-      api('/control', { method: 'POST', body: JSON.stringify(payload) }).catch(() => {});
+      const last = controlQueue[controlQueue.length - 1];
+      if (payload.type === 'move' && last?.type === 'move' && payload.view === last.view) {
+        controlQueue[controlQueue.length - 1] = payload;
+      } else {
+        controlQueue.push(payload);
+      }
+      if (controlQueue.length > maxControlQueue) compactControlQueue();
+      drainControlQueue();
+    }
+
+    function isPrintableTextKey(event) {
+      if (!event.key || event.key.length !== 1) return false;
+      if (event.metaKey) return false;
+      if ((event.ctrlKey || event.altKey) && !event.getModifierState('AltGraph')) return false;
+      return true;
     }
 
     function viewById(viewId) {
@@ -829,7 +939,7 @@ CLIENT_HTML = r"""<!doctype html>
     screen.addEventListener('pointermove', (event) => {
       const now = performance.now();
       const dragging = activePointerId === event.pointerId && pointerButtons.size > 0;
-      if (now - lastMove < (dragging ? 8 : 16)) return;
+      if (now - lastMove < (dragging ? 6 : 8)) return;
       lastMove = now;
       const point = pointFromEvent(event, dragging);
       if (point) sendControl({ type: 'move', x: point.x, y: point.y, drag: dragging });
@@ -877,6 +987,11 @@ CLIENT_HTML = r"""<!doctype html>
 
     window.addEventListener('keydown', (event) => {
       if (!token) return;
+      if (isPrintableTextKey(event)) {
+        sendControl({ type: 'text', text: event.key, release_modifiers: true });
+        event.preventDefault();
+        return;
+      }
       if (!pressed.has(event.code)) {
         pressed.add(event.code);
         sendControl({ type: 'key', action: 'down', code: event.code, key: event.key });
@@ -886,6 +1001,10 @@ CLIENT_HTML = r"""<!doctype html>
 
     window.addEventListener('keyup', (event) => {
       if (!token) return;
+      if (!pressed.has(event.code)) {
+        event.preventDefault();
+        return;
+      }
       pressed.delete(event.code);
       sendControl({ type: 'key', action: 'up', code: event.code, key: event.key });
       event.preventDefault();
@@ -922,6 +1041,7 @@ CLIENT_HTML = r"""<!doctype html>
     document.getElementById('disconnect').addEventListener('click', () => {
       manualDisconnect = true;
       token = null;
+      controlQueue.length = 0;
       location.reload();
     });
   </script>
@@ -1389,7 +1509,7 @@ class RemoteRequestHandler(BaseHTTPRequestHandler):
                         image = image.resize((width, height), resample=PIL_Image.Resampling.BILINEAR)
 
                     output = io.BytesIO()
-                    image.save(output, format="JPEG", quality=quality, optimize=False, subsampling=0)
+                    image.save(output, format="JPEG", quality=quality, optimize=False, subsampling=2)
                     frame = output.getvalue()
                     self.wfile.write(b"--frame\r\n")
                     self.wfile.write(b"Content-Type: image/jpeg\r\n")
@@ -1435,7 +1555,15 @@ def apply_control_event(state: RemoteState, payload: dict[str, Any]) -> None:
         clicks = int(round(-delta_y / 120))
         if clicks == 0:
             clicks = -1 if delta_y > 0 else 1
+        clicks *= SCROLL_MULTIPLIER
         pyautogui_module.scroll(clicks, x=x, y=y)
+        return
+
+    if event_type == "text":
+        text = str(payload.get("text") or "")
+        if payload.get("release_modifiers", True):
+            release_remote_modifiers()
+        type_unicode_text(text)
         return
 
     if event_type == "key":
