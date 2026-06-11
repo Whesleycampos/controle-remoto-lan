@@ -173,6 +173,8 @@ def load_runtime_dependencies() -> None:
     pyautogui_module = pyautogui
     pyperclip_module = pyperclip
     pyautogui.PAUSE = 0
+    pyautogui.MINIMUM_DURATION = 0
+    pyautogui.MINIMUM_SLEEP = 0
     pyautogui.FAILSAFE = False
 
 
@@ -610,6 +612,9 @@ CLIENT_HTML = r"""<!doctype html>
     let views = [];
     let activeView = '1';
     let lastMove = 0;
+    let activePointerId = null;
+    let lastRemotePoint = { x: 0, y: 0 };
+    const pointerButtons = new Set();
     let streamReconnectTimer = null;
     let manualDisconnect = false;
     const pressed = new Set();
@@ -642,15 +647,21 @@ CLIENT_HTML = r"""<!doctype html>
       return { left, top, width, height };
     }
 
-    function pointFromEvent(event) {
+    function pointFromEvent(event, clamp = false) {
       const box = displayBox();
-      const px = event.clientX - box.left;
-      const py = event.clientY - box.top;
-      if (px < 0 || py < 0 || px > box.width || py > box.height) return null;
-      return {
+      let px = event.clientX - box.left;
+      let py = event.clientY - box.top;
+      if (clamp) {
+        px = Math.max(0, Math.min(box.width, px));
+        py = Math.max(0, Math.min(box.height, py));
+      } else if (px < 0 || py < 0 || px > box.width || py > box.height) {
+        return null;
+      }
+      lastRemotePoint = {
         x: Math.round(px * remote.width / box.width),
         y: Math.round(py * remote.height / box.height)
       };
+      return lastRemotePoint;
     }
 
     function sendControl(payload) {
@@ -817,26 +828,46 @@ CLIENT_HTML = r"""<!doctype html>
 
     screen.addEventListener('pointermove', (event) => {
       const now = performance.now();
-      if (now - lastMove < 16) return;
+      const dragging = activePointerId === event.pointerId && pointerButtons.size > 0;
+      if (now - lastMove < (dragging ? 8 : 16)) return;
       lastMove = now;
-      const point = pointFromEvent(event);
-      if (point) sendControl({ type: 'move', x: point.x, y: point.y });
+      const point = pointFromEvent(event, dragging);
+      if (point) sendControl({ type: 'move', x: point.x, y: point.y, drag: dragging });
+      event.preventDefault();
     });
 
     screen.addEventListener('pointerdown', (event) => {
       const point = pointFromEvent(event);
       if (!point) return;
+      activePointerId = event.pointerId;
+      pointerButtons.add(event.button);
       screen.setPointerCapture?.(event.pointerId);
       sendControl({ type: 'button', action: 'down', button: event.button, x: point.x, y: point.y });
       event.preventDefault();
     });
 
     screen.addEventListener('pointerup', (event) => {
-      const point = pointFromEvent(event);
-      if (!point) return;
+      const point = pointFromEvent(event, true) || lastRemotePoint;
       sendControl({ type: 'button', action: 'up', button: event.button, x: point.x, y: point.y });
+      pointerButtons.delete(event.button);
+      if (pointerButtons.size === 0) {
+        activePointerId = null;
+        screen.releasePointerCapture?.(event.pointerId);
+      }
       event.preventDefault();
     });
+
+    function releasePointerButtons() {
+      if (pointerButtons.size === 0) return;
+      for (const button of pointerButtons) {
+        sendControl({ type: 'button', action: 'up', button, x: lastRemotePoint.x, y: lastRemotePoint.y });
+      }
+      pointerButtons.clear();
+      activePointerId = null;
+    }
+
+    screen.addEventListener('pointercancel', releasePointerButtons);
+    screen.addEventListener('lostpointercapture', releasePointerButtons);
 
     screen.addEventListener('wheel', (event) => {
       const point = pointFromEvent(event);
@@ -863,6 +894,7 @@ CLIENT_HTML = r"""<!doctype html>
     window.addEventListener('blur', () => {
       for (const code of pressed) sendControl({ type: 'key', action: 'up', code });
       pressed.clear();
+      releasePointerButtons();
     });
 
     screen.addEventListener('error', scheduleStreamReconnect);

@@ -255,7 +255,7 @@ class RemoteWindow:
         self.apply_view_dimensions(self.current_view)
         self.stop_event = threading.Event()
         self.frame_queue: queue.Queue[Image.Image] = queue.Queue(maxsize=1)
-        self.control_queue: queue.Queue[dict[str, Any]] = queue.Queue(maxsize=500)
+        self.control_queue: queue.Queue[dict[str, Any]] = queue.Queue(maxsize=1500)
         self.token_lock = threading.Lock()
         self.login_lock = threading.Lock()
         self.view_lock = threading.Lock()
@@ -275,6 +275,8 @@ class RemoteWindow:
         self.last_local_clipboard = self.local_clipboard_text()
         self.display_box = (0, 0, 1, 1)
         self.last_move_sent = 0.0
+        self.mouse_buttons_pressed: set[str] = set()
+        self.last_remote_point = (0, 0)
         self.pressed_keys: set[str] = set()
 
         self.root.title("Controle Remoto LAN - conectado")
@@ -881,7 +883,7 @@ if ($collection.Count -gt 0) {
                         payload = self.control_queue.get(timeout=0.5)
                     except queue.Empty:
                         continue
-                    if payload.get("type") == "move":
+                    if self.is_coalescible_move(payload):
                         payload = self.latest_move_payload(payload)
                     line = json.dumps(payload, separators=(",", ":")).encode("utf-8") + b"\n"
                     file.write(line)
@@ -901,7 +903,7 @@ if ($collection.Count -gt 0) {
                 payload = self.control_queue.get(timeout=0.2)
             except queue.Empty:
                 continue
-            if payload.get("type") == "move":
+            if self.is_coalescible_move(payload):
                 payload = self.latest_move_payload(payload)
             for attempt in range(3):
                 if self.stop_event.is_set():
@@ -920,20 +922,24 @@ if ($collection.Count -gt 0) {
     def latest_move_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
         latest = payload
         with self.control_queue.mutex:
-            while self.control_queue.queue and self.control_queue.queue[0].get("type") == "move":
+            while self.control_queue.queue and self.is_coalescible_move(self.control_queue.queue[0]):
                 latest = self.control_queue.queue.popleft()
         return latest
+
+    def is_coalescible_move(self, payload: dict[str, Any]) -> bool:
+        return payload.get("type") == "move" and not payload.get("drag")
 
     def enqueue_control(self, payload: dict[str, Any]) -> None:
         if self.stop_event.is_set():
             return
-        if payload.get("type") == "move" and self.control_queue.qsize() > 8:
+        if self.is_coalescible_move(payload) and self.control_queue.qsize() > 8:
             self.drop_stale_moves()
         try:
             self.control_queue.put_nowait(payload)
         except queue.Full:
-            if payload.get("type") == "move":
+            if self.is_coalescible_move(payload):
                 return
+            self.drop_stale_moves()
             try:
                 self.control_queue.put(payload, timeout=0.1)
             except queue.Full:
@@ -944,7 +950,7 @@ if ($collection.Count -gt 0) {
             latest_move: dict[str, Any] | None = None
             kept: list[dict[str, Any]] = []
             for item in self.control_queue.queue:
-                if item.get("type") == "move":
+                if self.is_coalescible_move(item):
                     latest_move = item
                 else:
                     kept.append(item)
@@ -993,28 +999,37 @@ if ($collection.Count -gt 0) {
         if self.exit_button is not None:
             self.exit_button.lift()
 
-    def map_point(self, event: tk.Event) -> tuple[int, int] | None:
+    def map_point(self, event: tk.Event, clamp: bool = False) -> tuple[int, int] | None:
         left, top, width, height = self.display_box
         px = int(event.x) - left
         py = int(event.y) - top
-        if px < 0 or py < 0 or px > width or py > height:
+        if clamp:
+            px = max(0, min(width, px))
+            py = max(0, min(height, py))
+        elif px < 0 or py < 0 or px > width or py > height:
             return None
         x = round(px * self.remote_width / width)
         y = round(py * self.remote_height / height)
+        self.last_remote_point = (x, y)
         return x, y
 
     def on_motion(self, event: tk.Event) -> str:
         now = time.monotonic()
-        if now - self.last_move_sent < 0.016:
+        dragging = bool(self.mouse_buttons_pressed)
+        min_interval = 0.008 if dragging else 0.016
+        if now - self.last_move_sent < min_interval:
             return "break"
         self.last_move_sent = now
-        point = self.map_point(event)
+        point = self.map_point(event, clamp=dragging)
         if point:
-            self.enqueue_control({"type": "move", "view": self.active_view_id(), "x": point[0], "y": point[1]})
+            payload = {"type": "move", "view": self.active_view_id(), "x": point[0], "y": point[1]}
+            if dragging:
+                payload["drag"] = True
+            self.enqueue_control(payload)
         return "break"
 
     def on_button(self, event: tk.Event, action: str, button: str) -> str:
-        point = self.map_point(event)
+        point = self.map_point(event, clamp=action == "up")
         if point:
             self.enqueue_control(
                 {
@@ -1026,6 +1041,19 @@ if ($collection.Count -gt 0) {
                     "y": point[1],
                 }
             )
+        if action == "down":
+            self.mouse_buttons_pressed.add(button)
+            try:
+                self.canvas.grab_set()
+            except tk.TclError:
+                pass
+        elif action == "up":
+            self.mouse_buttons_pressed.discard(button)
+            if not self.mouse_buttons_pressed:
+                try:
+                    self.canvas.grab_release()
+                except tk.TclError:
+                    pass
         self.canvas.focus_set()
         return "break"
 
@@ -1075,8 +1103,31 @@ if ($collection.Count -gt 0) {
         for key in list(self.pressed_keys):
             self.enqueue_control({"type": "key", "action": "up", "keysym": key, "key": key})
         self.pressed_keys.clear()
+        self.release_remote_mouse_buttons()
+
+    def release_remote_mouse_buttons(self) -> None:
+        if not self.mouse_buttons_pressed:
+            return
+        x, y = self.last_remote_point
+        for button in list(self.mouse_buttons_pressed):
+            self.enqueue_control(
+                {
+                    "type": "button",
+                    "view": self.active_view_id(),
+                    "action": "up",
+                    "button": button,
+                    "x": x,
+                    "y": y,
+                }
+            )
+        self.mouse_buttons_pressed.clear()
+        try:
+            self.canvas.grab_release()
+        except tk.TclError:
+            pass
 
     def close(self) -> None:
+        self.release_remote_mouse_buttons()
         self.stop_event.set()
         self.root.attributes("-fullscreen", False)
         self.root.destroy()
